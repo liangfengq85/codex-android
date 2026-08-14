@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.CodeX" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:statusBarColor">#1e1e1e</item>
+        <item name="android:navigationBarColor">#1e1e1e</item>
+        <item name="android:colorBackground">#1e1e1e</item>
+    </style>
+</resources>

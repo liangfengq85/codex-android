@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#1e1e1e" />
+  <title>CodeX · 代码查看器</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">⚡ CodeX</div>
+      <div class="path" id="breadcrumb">未打开文件</div>
+      <div class="actions">
+        <button id="btnAdd" class="btn">＋ 项目</button>
+        <button id="btnSearch" class="btn">🔍 搜索</button>
+        <button id="btnSave" class="btn" disabled>💾 保存</button>
+        <button id="btnProjects" class="btn">📁 项目</button>
+      </div>
+    </header>
+
+    <div class="body">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-title">
+          <span id="projName">项目</span>
+          <span class="hint">点击文件夹展开</span>
+        </div>
+        <div id="treeView" class="tree"></div>
+      </aside>
+
+      <main class="main">
+        <div id="welcome" class="welcome">
+          <div class="welcome-card">
+            <h1>⚡ CodeX</h1>
+            <p>像 VS Code 一样浏览、搜索、编辑代码 —— 无需编译。</p>
+            <button class="big-btn" id="btnAdd2">＋ 添加项目（选择文件夹）</button>
+            <p class="tip" id="supportTip"></p>
+          </div>
+        </div>
+        <div id="editorHost" class="editor-host" style="display:none"></div>
+      </main>
+    </div>
+
+    <!-- 文件内查找条 -->
+    <div class="findbar" id="findbar" style="display:none">
+      <input id="findInput" type="text" placeholder="查找当前文件…" />
+      <span id="findInfo" class="find-info"></span>
+      <button class="mini" id="findPrev">↑</button>
+      <button class="mini" id="findNext">↓</button>
+      <button class="mini" id="findClose">✕</button>
+    </div>
+
+    <!-- 项目全局搜索面板 -->
+    <div class="searchpanel" id="searchPanel" style="display:none">
+      <div class="sp-head">
+        <input id="searchInput" type="text" placeholder="在项目内搜索文本…" />
+        <label class="cb"><input type="checkbox" id="searchCase" /> 区分大小写</label>
+        <button class="mini" id="searchClose">✕</button>
+      </div>
+      <div class="sp-stats" id="searchStats"></div>
+      <div id="searchResults" class="sp-results"></div>
+    </div>
+
+    <!-- 项目列表弹窗 -->
+    <div class="modal" id="projectsModal" style="display:none">
+      <div class="modal-box">
+        <div class="modal-head">
+          <span>我的项目</span>
+          <button class="mini" id="projectsClose">✕</button>
+        </div>
+        <div id="projectsList" class="projects-list"></div>
+        <div class="modal-foot">
+          <button class="btn" id="btnAdd3">＋ 添加项目</button>
+        </div>
+      </div>
+    </div>
+
+    <input type="file" id="dirInput" webkitdirectory directory multiple style="display:none" />
+    <div id="toast" class="toast" style="display:none"></div>
+  </div>
+
+  <script src="js/highlight.js"></script>
+  <script src="js/fs.js"></script>
+  <script src="js/editor.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
