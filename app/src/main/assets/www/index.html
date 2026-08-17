@@ -10,13 +10,12 @@
 <body>
   <div id="app">
     <header class="topbar">
-      <button id="btnToggleSidebar" class="btn-icon" title="目录">☰</button>
+      <button id="btnToggleSidebar" class="btn-icon active" title="目录">☰</button>
       <div class="brand">⚡ CodeX</div>
       <div class="path" id="breadcrumb">未打开文件</div>
       <div class="actions">
         <button id="btnAdd" class="btn">＋</button>
         <button id="btnSearch" class="btn">🔍</button>
-        <button id="btnSave" class="btn" disabled>💾</button>
         <button id="btnProjects" class="btn">📁</button>
       </div>
     </header>
@@ -24,8 +23,8 @@
     <div class="body" id="bodyContainer">
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-title">
+          <button class="sidebar-hide-btn" id="btnHideSidebar" title="隐藏目录">◀</button>
           <span id="projName">项目</span>
-          <span class="hint">点击展开</span>
         </div>
         <div id="treeView" class="tree"></div>
       </aside>
@@ -41,9 +40,20 @@
             <p class="tip" id="supportTip"></p>
           </div>
         </div>
-        <div id="editorHost" class="editor-host" style="display:none"></div>
 
-        <!-- 字体缩放工具条 -->
+        <div id="editorWrap" class="editor-wrap" style="display:none">
+          <div class="editor-toolbar" id="editorToolbar">
+            <button class="etool-btn" id="btnUndo" disabled title="撤回">↶</button>
+            <button class="etool-btn" id="btnRedo" disabled title="重做">↷</button>
+            <div class="etool-sep"></div>
+            <button class="etool-btn" id="btnSaveEditor" disabled>💾 保存</button>
+            <button class="etool-btn" id="btnCopyMenu" title="复制">📋</button>
+            <div class="etool-spacer"></div>
+            <span class="etool-info" id="editorInfo">—</span>
+          </div>
+          <div id="editorHost" class="editor-host"></div>
+        </div>
+
         <div class="zoom-bar" id="zoomBar" style="display:none">
           <button class="zoom-btn" id="zoomOut">A−</button>
           <span class="zoom-size" id="zoomSize">13</span>
@@ -52,24 +62,61 @@
       </main>
     </div>
 
-    <!-- 文件内查找条 -->
-    <div class="findbar" id="findbar" style="display:none">
-      <input id="findInput" type="text" placeholder="查找当前文件…" />
-      <span id="findInfo" class="find-info"></span>
-      <button class="mini" id="findPrev">↑</button>
-      <button class="mini" id="findNext">↓</button>
-      <button class="mini" id="findClose">✕</button>
-    </div>
-
-    <!-- 项目全局搜索面板 -->
+    <!-- 统一搜索面板 -->
     <div class="searchpanel" id="searchPanel" style="display:none">
       <div class="sp-head">
-        <input id="searchInput" type="text" placeholder="在项目内搜索文本…" />
-        <label class="cb"><input type="checkbox" id="searchCase" /> 区分大小写</label>
+        <div class="sp-mode-toggle">
+          <button class="sp-mode-btn active" id="spModeFile">📄 当前文件</button>
+          <button class="sp-mode-btn" id="spModeProject">📁 整个项目</button>
+        </div>
         <button class="mini" id="searchClose">✕</button>
+      </div>
+      <div class="sp-search-row">
+        <input id="searchInput" type="text" placeholder="搜索…" />
+        <label class="cb"><input type="checkbox" id="searchCase" /> Aa</label>
+        <button class="mini" id="searchPrev" title="上一个">↑</button>
+        <button class="mini" id="searchNext" title="下一个">↓</button>
       </div>
       <div class="sp-stats" id="searchStats"></div>
       <div id="searchResults" class="sp-results"></div>
+    </div>
+
+    <!-- 复制弹窗 -->
+    <div class="copy-popup" id="copyPopup" style="display:none">
+      <div class="copy-popup-arrow"></div>
+      <div id="copyPopupMain">
+        <button class="copy-btn" data-action="all">📋 复制全部</button>
+        <button class="copy-btn" data-action="selection">📋 复制选中区域</button>
+        <button class="copy-btn" data-action="line">📋 复制当前行</button>
+        <button class="copy-btn" data-action="range">📋 按行范围复制…</button>
+      </div>
+      <div id="copyPopupRange" style="display:none">
+        <div class="copy-range-row">
+          <span>行</span>
+          <input type="number" id="copyStartLine" min="1" placeholder="起" />
+          <span>—</span>
+          <input type="number" id="copyEndLine" min="1" placeholder="止" />
+          <button class="btn" id="copyRangeDo">复制</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 未保存提示弹窗 -->
+    <div class="modal" id="unsavedModal" style="display:none">
+      <div class="modal-box unsaved-box">
+        <div class="modal-head">
+          <span>⚠️ 未保存的修改</span>
+        </div>
+        <div class="unsaved-body">
+          <p id="unsavedFileName">当前文件</p>
+          <p>有未保存的修改，是否保存？</p>
+        </div>
+        <div class="unsaved-actions">
+          <button class="btn" id="btnUnsavedSave">💾 保存</button>
+          <button class="btn btn-warn" id="btnUnsavedDiscard">不保存</button>
+          <button class="mini" id="btnUnsavedCancel">取消</button>
+        </div>
+      </div>
     </div>
 
     <!-- 项目列表弹窗 -->
