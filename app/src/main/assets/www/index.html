@@ -10,24 +10,27 @@
 <body>
   <div id="app">
     <header class="topbar">
+      <button id="btnToggleSidebar" class="btn-icon" title="目录">☰</button>
       <div class="brand">⚡ CodeX</div>
       <div class="path" id="breadcrumb">未打开文件</div>
       <div class="actions">
-        <button id="btnAdd" class="btn">＋ 项目</button>
-        <button id="btnSearch" class="btn">🔍 搜索</button>
-        <button id="btnSave" class="btn" disabled>💾 保存</button>
-        <button id="btnProjects" class="btn">📁 项目</button>
+        <button id="btnAdd" class="btn">＋</button>
+        <button id="btnSearch" class="btn">🔍</button>
+        <button id="btnSave" class="btn" disabled>💾</button>
+        <button id="btnProjects" class="btn">📁</button>
       </div>
     </header>
 
-    <div class="body">
+    <div class="body" id="bodyContainer">
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-title">
           <span id="projName">项目</span>
-          <span class="hint">点击文件夹展开</span>
+          <span class="hint">点击展开</span>
         </div>
         <div id="treeView" class="tree"></div>
       </aside>
+
+      <div class="resizer" id="resizer"><div class="resizer-handle"></div></div>
 
       <main class="main">
         <div id="welcome" class="welcome">
@@ -39,6 +42,13 @@
           </div>
         </div>
         <div id="editorHost" class="editor-host" style="display:none"></div>
+
+        <!-- 字体缩放工具条 -->
+        <div class="zoom-bar" id="zoomBar" style="display:none">
+          <button class="zoom-btn" id="zoomOut">A−</button>
+          <span class="zoom-size" id="zoomSize">13</span>
+          <button class="zoom-btn" id="zoomIn">A+</button>
+        </div>
       </main>
     </div>
 
