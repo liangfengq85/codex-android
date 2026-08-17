@@ -15,6 +15,7 @@
   --lh: 20px;
   --pad-y: 8px;
   --pad-x: 12px;
+  --sidebar-w: 160px;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -29,31 +30,41 @@ body {
 
 /* ---------------- 顶栏 ---------------- */
 .topbar {
-  display: flex; align-items: center; gap: 10px;
-  height: 44px; padding: 0 10px;
+  display: flex; align-items: center; gap: 6px;
+  height: 44px; padding: 0 6px;
   background: var(--bg-bar); border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
 }
+.btn-icon {
+  background: transparent; border: none; color: var(--fg);
+  font-size: 18px; padding: 6px 8px; cursor: pointer;
+  border-radius: 4px; flex: 0 0 auto; line-height: 1;
+}
+.btn-icon:active { background: var(--active); }
+.btn-icon.active { background: var(--accent); color: #fff; }
 .brand { font-weight: 700; color: #fff; font-size: 15px; white-space: nowrap; }
 .path {
   flex: 1 1 auto; font-size: 12px; color: var(--fg-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
 }
-.actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.actions { display: flex; gap: 4px; flex: 0 0 auto; }
 .btn {
   background: var(--accent); color: #fff; border: none; border-radius: 4px;
-  padding: 6px 10px; font-size: 12px; cursor: pointer; white-space: nowrap;
+  padding: 6px 8px; font-size: 14px; cursor: pointer; white-space: nowrap;
+  line-height: 1;
 }
-.btn:hover { background: var(--accent-hi); }
+.btn:active { background: var(--accent-hi); }
 .btn:disabled { background: #444; color: #888; cursor: default; }
 
 /* ---------------- 主体 ---------------- */
 .body { flex: 1 1 auto; display: flex; min-height: 0; }
 
+/* ---------------- 侧栏（可调宽度） ---------------- */
 .sidebar {
-  width: 248px; flex: 0 0 248px; background: var(--bg-side);
+  width: var(--sidebar-w); flex: 0 0 var(--sidebar-w); background: var(--bg-side);
   border-right: 1px solid var(--border); display: flex; flex-direction: column;
-  min-height: 0;
+  min-height: 0; min-width: 80px;
 }
 .sidebar-title {
   padding: 8px 10px; font-size: 11px; text-transform: uppercase;
@@ -61,17 +72,38 @@ body {
   border-bottom: 1px solid var(--border);
 }
 .sidebar-title .hint { text-transform: none; font-size: 10px; }
-.tree { flex: 1 1 auto; overflow: auto; padding: 4px 0; }
+.tree {
+  flex: 1 1 auto; overflow: auto; padding: 4px 0;
+  -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+}
 
 .tree-row {
-  display: flex; align-items: center; gap: 6px; height: 22px;
+  display: flex; align-items: center; gap: 6px; height: 26px;
   font-size: 13px; cursor: pointer; white-space: nowrap; user-select: none;
   padding-right: 8px;
 }
-.tree-row:hover { background: var(--active); }
+.tree-row:active { background: var(--active); }
 .tree-row.active { background: #094771; }
 .tree-icon { width: 18px; text-align: center; flex: 0 0 18px; font-size: 12px; }
 .tree-label { overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------------- 拖拽分隔条 ---------------- */
+.resizer {
+  flex: 0 0 8px; width: 8px; background: var(--border);
+  cursor: col-resize; touch-action: none;
+  display: flex; align-items: center; justify-content: center;
+  position: relative; z-index: 10;
+}
+.resizer:active { background: var(--accent); }
+.resizer-handle {
+  width: 2px; height: 36px; background: #666; border-radius: 1px;
+  pointer-events: none;
+}
+.resizer:active .resizer-handle { background: #fff; }
+
+/* 侧栏隐藏状态 */
+.body.sidebar-hidden .sidebar,
+.body.sidebar-hidden .resizer { display: none; }
 
 /* ---------------- 主区 ---------------- */
 .main { flex: 1 1 auto; position: relative; min-width: 0; display: flex; }
@@ -84,7 +116,7 @@ body {
   background: var(--accent); color: #fff; border: none; border-radius: 6px;
   padding: 12px 20px; font-size: 15px; cursor: pointer; margin-top: 10px;
 }
-.big-btn:hover { background: var(--accent-hi); }
+.big-btn:active { background: var(--accent-hi); }
 
 /* ---------------- 编辑器（叠层） ---------------- */
 .editor-host { flex: 1; display: flex; min-width: 0; background: var(--bg); overflow: hidden; }
@@ -125,6 +157,24 @@ textarea.ta::selection { background: #264f78; }
 .tok-number   { color: #b5cea8; }
 .tok-var      { color: #d4d4d4; }
 
+/* ---------------- 字体缩放工具条 ---------------- */
+.zoom-bar {
+  position: absolute; bottom: 8px; right: 8px; z-index: 20;
+  display: flex; align-items: center; gap: 0;
+  background: rgba(45, 45, 48, 0.92); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px; backdrop-filter: blur(4px);
+}
+.zoom-btn {
+  background: transparent; color: var(--fg); border: none;
+  border-radius: 4px; padding: 6px 10px; font-size: 13px;
+  cursor: pointer; font-weight: 700; line-height: 1;
+}
+.zoom-btn:active { background: var(--accent); color: #fff; }
+.zoom-size {
+  color: var(--fg-dim); font-size: 11px; min-width: 28px;
+  text-align: center; cursor: pointer; user-select: none;
+}
+
 /* ---------------- 查找条 ---------------- */
 .findbar {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 30;
@@ -140,9 +190,9 @@ textarea.ta::selection { background: #264f78; }
   background: #3a3d41; color: var(--fg); border: 1px solid var(--border);
   border-radius: 4px; padding: 5px 9px; font-size: 12px; cursor: pointer;
 }
-.mini:hover { background: #4a4d51; }
+.mini:active { background: #4a4d51; }
 .mini.danger { background: #5a2a2a; }
-.mini.danger:hover { background: #7a3a3a; }
+.mini.danger:active { background: #7a3a3a; }
 
 /* ---------------- 全局搜索面板 ---------------- */
 .searchpanel {
@@ -157,9 +207,9 @@ textarea.ta::selection { background: #264f78; }
 }
 .sp-head .cb { font-size: 11px; color: var(--fg-dim); display: flex; align-items: center; gap: 3px; }
 .sp-stats { padding: 6px 12px; font-size: 11px; color: var(--fg-dim); border-bottom: 1px solid var(--border); }
-.sp-results { flex: 1; overflow: auto; }
+.sp-results { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .sp-item { padding: 6px 12px; border-bottom: 1px solid #2a2a2a; cursor: pointer; }
-.sp-item:hover { background: var(--active); }
+.sp-item:active { background: var(--active); }
 .sp-item-head { font-size: 12px; color: #3794ff; }
 .sp-item-head .sp-ln { color: var(--fg-dim); }
 .sp-item-body { font-family: var(--mono); font-size: 12px; color: var(--fg); margin-top: 2px; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
@@ -175,7 +225,7 @@ textarea.ta::selection { background: #264f78; }
   border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column;
 }
 .modal-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); font-weight: 600; }
-.projects-list { flex: 1; overflow: auto; padding: 8px; }
+.projects-list { flex: 1; overflow: auto; padding: 8px; -webkit-overflow-scrolling: touch; }
 .proj-row { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-bottom: 1px solid #2a2a2a; }
 .proj-name { font-size: 14px; }
 .proj-kind { font-size: 11px; color: var(--fg-dim); }
@@ -191,7 +241,16 @@ textarea.ta::selection { background: #264f78; }
 
 /* ---------------- 窄屏适配 ---------------- */
 @media (max-width: 640px) {
-  .sidebar { width: 160px; flex-basis: 160px; }
+  :root { --sidebar-w: 140px; }
   .brand { display: none; }
   .searchpanel { width: 100%; max-width: 100%; }
+  .topbar { padding: 0 4px; gap: 4px; }
+  .btn { padding: 6px 7px; font-size: 15px; }
+  .tree-row { height: 28px; font-size: 13px; }
+  .resizer { flex: 0 0 10px; width: 10px; }
+}
+
+@media (max-width: 380px) {
+  :root { --sidebar-w: 120px; }
+  .btn { padding: 6px 6px; }
 }
