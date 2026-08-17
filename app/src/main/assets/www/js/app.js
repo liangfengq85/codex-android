@@ -1,11 +1,6 @@
 /* =========================================================================
  * app.js — 主控制器：项目切换 / 文件树 / 打开·保存 / 全局搜索 / 查找条
- *
- * 改进：
- *   - 添加项目时处理 null（用户取消选择）
- *   - 构建目录树时显示加载提示
- *   - 项目列表显示正确的 kind 标签
- *   - 外部文件打开处理 __CODEX_ERR__ 前缀
+ * 新增：侧栏拖拽调宽 / 侧栏开关 / 字体缩放按钮
  * ========================================================================= */
 (function (global) {
   'use strict';
@@ -33,6 +28,9 @@
       dirty = true;
       $('btnSave').disabled = false;
       updateBreadcrumb();
+    });
+    Editor.setOnZoom(function (fs) {
+      $('zoomSize').textContent = fs;
     });
 
     $('btnAdd').addEventListener('click', addProject);
@@ -62,15 +60,102 @@
     // 项目弹窗
     $('projectsClose').addEventListener('click', function () { $('projectsModal').style.display = 'none'; });
 
+    // ---- 侧栏开关 ----
+    $('btnToggleSidebar').addEventListener('click', toggleSidebar);
+    initSidebarState();
+
+    // ---- 拖拽调宽 ----
+    initResizer();
+
+    // ---- 字体缩放按钮 ----
+    $('zoomIn').addEventListener('click', function () { Editor.zoomIn(); });
+    $('zoomOut').addEventListener('click', function () { Editor.zoomOut(); });
+    $('zoomSize').addEventListener('click', function () { Editor.zoomReset(); });
+    // 初始化缩放显示
+    $('zoomSize').textContent = Editor.getFontSize();
+
     // 能力提示
     var tip = '';
-    if (FS.kind === 'native') tip = '✅ 已支持直接访问手机文件：点「＋ 项目」选择手机文件夹即可读写。';
+    if (FS.kind === 'native') tip = '✅ 已支持直接访问手机文件：点「＋」选择手机文件夹即可读写。';
     else if (FS.kind === 'fsa') tip = '✅ 当前浏览器支持直接读写文件夹（安卓 Chrome / Edge）。';
     else if (FS.kind === 'blob') tip = 'ℹ️ 当前浏览器仅支持"选择文件夹"读取，编辑内容保存在应用沙箱内。';
     else tip = '⚠️ 当前浏览器不支持文件夹访问，请用安卓 Chrome 打开。';
     $('supportTip').textContent = tip;
 
     global.App = { openFind: openFind, saveCurrent: saveCurrent, openExternal: openExternalFile };
+  }
+
+  // ---------- 侧栏开关 ----------
+  function toggleSidebar() {
+    var body = $('bodyContainer');
+    var btn = $('btnToggleSidebar');
+    var hidden = body.classList.toggle('sidebar-hidden');
+    if (hidden) {
+      btn.classList.remove('active');
+    } else {
+      btn.classList.add('active');
+      restoreSidebarWidth();
+    }
+    try { localStorage.setItem('codex-sidebar-hidden', hidden ? '1' : '0'); } catch (e) {}
+  }
+
+  function initSidebarState() {
+    var btn = $('btnToggleSidebar');
+    var hidden = false;
+    try { hidden = localStorage.getItem('codex-sidebar-hidden') === '1'; } catch (e) {}
+    if (hidden) {
+      $('bodyContainer').classList.add('sidebar-hidden');
+    } else {
+      btn.classList.add('active');
+      restoreSidebarWidth();
+    }
+  }
+
+  function restoreSidebarWidth() {
+    var sidebar = $('sidebar');
+    try {
+      var w = parseInt(localStorage.getItem('codex-sidebar-w'), 10);
+      if (w >= 80 && w <= window.innerWidth * 0.75) {
+        document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+      }
+    } catch (e) {}
+  }
+
+  // ---------- 拖拽调宽 ----------
+  function initResizer() {
+    var resizer = $('resizer');
+    var sidebar = $('sidebar');
+    var isResizing = false;
+
+    function onStart(e) {
+      isResizing = true;
+      e.preventDefault();
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onEnd);
+      document.addEventListener('pointercancel', onEnd);
+    }
+
+    function onMove(e) {
+      if (!isResizing) return;
+      e.preventDefault();
+      var rect = $('bodyContainer').getBoundingClientRect();
+      var x = e.clientX - rect.left;
+      var w = Math.max(80, Math.min(window.innerWidth * 0.75, x));
+      document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+    }
+
+    function onEnd() {
+      if (!isResizing) return;
+      isResizing = false;
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onEnd);
+      document.removeEventListener('pointercancel', onEnd);
+      try {
+        localStorage.setItem('codex-sidebar-w', String(sidebar.offsetWidth));
+      } catch (e) {}
+    }
+
+    resizer.addEventListener('pointerdown', onStart);
   }
 
   // ---------- 外部文件关联打开 ----------
@@ -103,7 +188,7 @@
       var proj;
       if (FS.kind === 'native' || FS.kind === 'fsa') {
         proj = await FS.addViaPicker();
-        if (!proj) return; // 用户取消选择
+        if (!proj) return;
       } else if (FS.kind === 'blob') {
         $('dirInput').click();
         return;
@@ -134,8 +219,8 @@
     $('projName').textContent = proj.name;
     $('welcome').style.display = 'none';
     $('editorHost').style.display = '';
+    $('zoomBar').style.display = 'flex';
 
-    // 显示加载提示
     var treeView = $('treeView');
     treeView.innerHTML = '<div style="padding:20px;color:#888;text-align:center;font-size:13px">⏳ 正在扫描目录…</div>';
 
