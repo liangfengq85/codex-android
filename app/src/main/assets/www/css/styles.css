@@ -56,27 +56,34 @@ body {
 }
 .btn:active { background: var(--accent-hi); }
 .btn:disabled { background: #444; color: #888; cursor: default; }
+.btn-warn { background: #5a2a2a; }
+.btn-warn:active { background: #7a3a3a; }
 
 /* ---------------- 主体 ---------------- */
 .body { flex: 1 1 auto; display: flex; min-height: 0; }
 
-/* ---------------- 侧栏（可调宽度） ---------------- */
+/* ---------------- 侧栏 ---------------- */
 .sidebar {
   width: var(--sidebar-w); flex: 0 0 var(--sidebar-w); background: var(--bg-side);
   border-right: 1px solid var(--border); display: flex; flex-direction: column;
   min-height: 0; min-width: 80px;
 }
 .sidebar-title {
-  padding: 8px 10px; font-size: 11px; text-transform: uppercase;
-  color: var(--fg-dim); display: flex; justify-content: space-between; align-items: baseline;
-  border-bottom: 1px solid var(--border);
+  padding: 0 4px 0 0; font-size: 11px; text-transform: uppercase;
+  color: var(--fg-dim); display: flex; align-items: center; gap: 4px;
+  border-bottom: 1px solid var(--border); height: 30px; flex: 0 0 30px;
 }
-.sidebar-title .hint { text-transform: none; font-size: 10px; }
+.sidebar-hide-btn {
+  background: transparent; border: none; color: var(--fg-dim);
+  font-size: 14px; cursor: pointer; padding: 6px 8px; line-height: 1;
+  flex: 0 0 auto;
+}
+.sidebar-hide-btn:active { color: #fff; background: var(--active); }
+.sidebar-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree {
   flex: 1 1 auto; overflow: auto; padding: 4px 0;
   -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
 }
-
 .tree-row {
   display: flex; align-items: center; gap: 6px; height: 26px;
   font-size: 13px; cursor: pointer; white-space: nowrap; user-select: none;
@@ -100,8 +107,6 @@ body {
   pointer-events: none;
 }
 .resizer:active .resizer-handle { background: #fff; }
-
-/* 侧栏隐藏状态 */
 .body.sidebar-hidden .sidebar,
 .body.sidebar-hidden .resizer { display: none; }
 
@@ -118,8 +123,29 @@ body {
 }
 .big-btn:active { background: var(--accent-hi); }
 
-/* ---------------- 编辑器（叠层） ---------------- */
-.editor-host { flex: 1; display: flex; min-width: 0; background: var(--bg); overflow: hidden; }
+/* ---------------- 编辑器工具条 ---------------- */
+.editor-wrap {
+  flex: 1; display: flex; flex-direction: column; min-width: 0;
+}
+.editor-toolbar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 2px;
+  padding: 3px 6px; background: var(--bg-elev);
+  border-bottom: 1px solid var(--border); height: 34px;
+}
+.etool-btn {
+  background: transparent; border: none; color: var(--fg);
+  font-size: 13px; cursor: pointer; padding: 5px 8px;
+  border-radius: 4px; line-height: 1; white-space: nowrap;
+}
+.etool-btn:active { background: var(--active); }
+.etool-btn:disabled { color: #555; cursor: default; }
+.etool-btn:not(:disabled):active { background: var(--accent); color: #fff; }
+.etool-sep { width: 1px; height: 18px; background: var(--border); margin: 0 3px; flex: 0 0 1px; }
+.etool-spacer { flex: 1 1 auto; }
+.etool-info { font-size: 11px; color: var(--fg-dim); white-space: nowrap; }
+
+/* ---------------- 编辑器 ---------------- */
+.editor-host { flex: 1; display: flex; min-width: 0; background: var(--bg); overflow: hidden; position: relative; }
 .gutter {
   flex: 0 0 52px; width: 52px; overflow: hidden; background: var(--bg);
   border-right: 1px solid var(--border); user-select: none;
@@ -147,8 +173,10 @@ textarea.ta {
   caret-color: #fff; outline: none; overflow: auto;
 }
 textarea.ta::selection { background: #264f78; }
+/* 隐藏原生滚动条 — 用自定义滑块替代 */
+textarea.ta::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
-/* 语法配色（VS Code Dark+） */
+/* 语法配色 */
 .tok-keyword  { color: #569cd6; }
 .tok-function { color: #dcdcaa; }
 .tok-type     { color: #4ec9b0; }
@@ -157,12 +185,32 @@ textarea.ta::selection { background: #264f78; }
 .tok-number   { color: #b5cea8; }
 .tok-var      { color: #d4d4d4; }
 
+/* 花括号匹配高亮 */
+.bracket-match {
+  background: rgba(255, 200, 0, 0.25);
+  border: 1px solid rgba(255, 200, 0, 0.6);
+  border-radius: 2px;
+}
+
+/* 自定义滚动条 */
+.custom-scrollbar {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 28px;
+  z-index: 5; background: transparent; pointer-events: auto;
+}
+.custom-scroll-thumb {
+  position: absolute; left: 5px; right: 5px;
+  background: rgba(255,255,255,0.18); border-radius: 4px;
+  cursor: pointer; touch-action: none; min-height: 30px;
+  transition: background 0.15s;
+}
+.custom-scroll-thumb:active { background: rgba(255,255,255,0.4); }
+
 /* ---------------- 字体缩放工具条 ---------------- */
 .zoom-bar {
-  position: absolute; bottom: 8px; right: 8px; z-index: 20;
+  position: absolute; bottom: 8px; right: 40px; z-index: 20;
   display: flex; align-items: center; gap: 0;
   background: rgba(45, 45, 48, 0.92); border: 1px solid var(--border);
-  border-radius: 6px; padding: 3px; backdrop-filter: blur(4px);
+  border-radius: 6px; padding: 3px;
 }
 .zoom-btn {
   background: transparent; color: var(--fg); border: none;
@@ -175,37 +223,25 @@ textarea.ta::selection { background: #264f78; }
   text-align: center; cursor: pointer; user-select: none;
 }
 
-/* ---------------- 查找条 ---------------- */
-.findbar {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 30;
-  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
-  background: var(--bg-elev); border-top: 1px solid var(--border);
-}
-.findbar input {
-  flex: 1; background: #1e1e1e; color: var(--fg); border: 1px solid var(--border);
-  border-radius: 4px; padding: 6px 8px; font-size: 13px;
-}
-.find-info { color: var(--fg-dim); font-size: 12px; min-width: 56px; }
-.mini {
-  background: #3a3d41; color: var(--fg); border: 1px solid var(--border);
-  border-radius: 4px; padding: 5px 9px; font-size: 12px; cursor: pointer;
-}
-.mini:active { background: #4a4d51; }
-.mini.danger { background: #5a2a2a; }
-.mini.danger:active { background: #7a3a3a; }
-
-/* ---------------- 全局搜索面板 ---------------- */
+/* ---------------- 统一搜索面板 ---------------- */
 .searchpanel {
-  position: absolute; top: 44px; right: 0; bottom: 0; width: 360px; max-width: 86%;
+  position: absolute; top: 44px; right: 0; bottom: 0; width: 340px; max-width: 92%;
   background: var(--bg-elev); border-left: 1px solid var(--border); z-index: 25;
   display: flex; flex-direction: column;
 }
-.sp-head { display: flex; gap: 8px; align-items: center; padding: 10px; border-bottom: 1px solid var(--border); }
-.sp-head input[type=text] {
-  flex: 1; background: #1e1e1e; color: var(--fg); border: 1px solid var(--border);
-  border-radius: 4px; padding: 7px 9px; font-size: 13px;
+.sp-head { display: flex; align-items: center; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); }
+.sp-mode-toggle { display: flex; flex: 1; gap: 0; border-radius: 4px; overflow: hidden; border: 1px solid var(--border); }
+.sp-mode-btn {
+  flex: 1; background: transparent; border: none; color: var(--fg-dim);
+  padding: 5px 8px; font-size: 11px; cursor: pointer; white-space: nowrap;
 }
-.sp-head .cb { font-size: 11px; color: var(--fg-dim); display: flex; align-items: center; gap: 3px; }
+.sp-mode-btn.active { background: var(--accent); color: #fff; }
+.sp-search-row { display: flex; gap: 6px; align-items: center; padding: 8px; border-bottom: 1px solid var(--border); }
+.sp-search-row input[type=text] {
+  flex: 1; background: #1e1e1e; color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 6px 8px; font-size: 13px;
+}
+.sp-search-row .cb { font-size: 11px; color: var(--fg-dim); display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .sp-stats { padding: 6px 12px; font-size: 11px; color: var(--fg-dim); border-bottom: 1px solid var(--border); }
 .sp-results { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .sp-item { padding: 6px 12px; border-bottom: 1px solid #2a2a2a; cursor: pointer; }
@@ -214,6 +250,47 @@ textarea.ta::selection { background: #264f78; }
 .sp-item-head .sp-ln { color: var(--fg-dim); }
 .sp-item-body { font-family: var(--mono); font-size: 12px; color: var(--fg); margin-top: 2px; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 .sp-empty { padding: 16px; color: var(--fg-dim); font-size: 12px; text-align: center; }
+.mini {
+  background: #3a3d41; color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 5px 9px; font-size: 12px; cursor: pointer;
+}
+.mini:active { background: #4a4d51; }
+.mini.danger { background: #5a2a2a; }
+.mini.danger:active { background: #7a3a3a; }
+
+/* ---------------- 复制弹窗 ---------------- */
+.copy-popup {
+  position: absolute; z-index: 55; min-width: 180px;
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  padding: 4px; display: flex; flex-direction: column; gap: 2px;
+}
+.copy-btn {
+  background: transparent; border: none; color: var(--fg);
+  font-size: 13px; cursor: pointer; padding: 8px 12px;
+  border-radius: 4px; text-align: left; white-space: nowrap;
+}
+.copy-btn:active { background: var(--accent); color: #fff; }
+.copy-range-row {
+  display: flex; align-items: center; gap: 4px; padding: 4px;
+}
+.copy-range-row input {
+  width: 50px; background: #1e1e1e; color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 5px; font-size: 13px; text-align: center;
+}
+.copy-range-row span { font-size: 12px; color: var(--fg-dim); }
+.copy-range-row .btn { padding: 5px 10px; font-size: 12px; }
+
+/* ---------------- 未保存提示弹窗 ---------------- */
+.unsaved-box { width: 340px; max-width: 92%; }
+.unsaved-body { padding: 16px; font-size: 14px; line-height: 1.6; }
+.unsaved-body p { margin: 0 0 6px; }
+.unsaved-body p:first-child { font-weight: 600; color: #fff; }
+.unsaved-actions {
+  display: flex; gap: 8px; padding: 10px 14px;
+  border-top: 1px solid var(--border); justify-content: flex-end;
+}
 
 /* ---------------- 项目弹窗 ---------------- */
 .modal {
@@ -248,9 +325,12 @@ textarea.ta::selection { background: #264f78; }
   .btn { padding: 6px 7px; font-size: 15px; }
   .tree-row { height: 28px; font-size: 13px; }
   .resizer { flex: 0 0 10px; width: 10px; }
+  .etool-btn { padding: 5px 6px; font-size: 12px; }
+  .etool-info { display: none; }
+  .zoom-bar { right: 40px; bottom: 6px; }
 }
-
 @media (max-width: 380px) {
   :root { --sidebar-w: 120px; }
   .btn { padding: 6px 6px; }
+  .sp-mode-btn { font-size: 10px; padding: 5px 4px; }
 }
