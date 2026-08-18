@@ -1,14 +1,11 @@
 /* =========================================================================
  * app.js — 主控制器
  *
- * 功能：
- *   - 项目切换 / 文件树 / 打开·保存
- *   - 统一搜索（当前文件 / 整个项目）+ 跳转
- *   - 侧栏开关 / 拖拽调宽 / 字体缩放
- *   - 撤回 / 重做状态管理
- *   - 长按复制（全部 / 选中 / 当前行 / 按行范围）
- *   - 未保存提示弹窗
- *   - 光标位置显示
+ * 改进：
+ *   - 搜索结果点击 → 先关闭面板再跳转，requestAnimationFrame 延迟避免卡顿
+ *   - 新增选择浮动条：拖选文本后自动出现"复制"按钮
+ *   - 移除 contextmenu 拦截 → 允许原生长按选择（水滴手柄）
+ *   - 撤回/重做按钮状态适配新编辑器
  * ========================================================================= */
 (function (global) {
   'use strict';
@@ -23,6 +20,8 @@
   var searchMode = 'file';
   var pendingFileNode = null;
   var pendingLineNo = null;
+  var selBar = null;
+  var selTimer = null;
 
   // ---------- 工具 ----------
   function toast(msg, ms) {
@@ -84,6 +83,9 @@
     // 复制弹窗
     initCopyPopup();
 
+    // 选择浮动条
+    initSelectionBar();
+
     // 未保存弹窗
     $('btnUnsavedSave').addEventListener('click', async function () {
       $('unsavedModal').style.display = 'none';
@@ -118,7 +120,7 @@
 
     // 能力提示
     var tip = '';
-    if (FS.kind === 'native') tip = '✅ 点「＋」选择手机文件夹即可读写。长按代码可复制。';
+    if (FS.kind === 'native') tip = '✅ 点「＋」选择手机文件夹即可读写。长按拖动可选择复制。';
     else if (FS.kind === 'fsa') tip = '✅ 当前浏览器支持直接读写文件夹。';
     else if (FS.kind === 'blob') tip = 'ℹ️ 仅支持选择文件夹读取，编辑保存在应用沙箱内。';
     else tip = '⚠️ 请用安卓 Chrome 打开。';
@@ -198,6 +200,82 @@
     resizer.addEventListener('pointerdown', onStart);
   }
 
+  // ---------- 选择浮动条 ----------
+  function initSelectionBar() {
+    selBar = document.createElement('div');
+    selBar.className = 'selection-bar';
+    selBar.id = 'selectionBar';
+    selBar.style.display = 'none';
+    selBar.innerHTML = '<button id="selBarCopy">📋 复制</button><button id="selBarAll">全选</button>';
+    $('app').appendChild(selBar);
+
+    $('selBarCopy').addEventListener('click', function () {
+      if (Editor.copySelection()) selBar.style.display = 'none';
+      else toast('请先选择文本');
+    });
+    $('selBarAll').addEventListener('click', function () {
+      Editor.focus();
+      // 全选编辑器内容
+      var pre = Editor.getPre();
+      if (pre) {
+        var range = document.createRange();
+        range.selectNodeContents(pre);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    });
+
+    // 监听选区变化
+    document.addEventListener('selectionchange', function () {
+      if (selTimer) clearTimeout(selTimer);
+      selTimer = setTimeout(checkSelectionBar, 100);
+    });
+
+    // 滚动/点击时隐藏
+    var editorHost = $('editorHost');
+    if (editorHost) {
+      editorHost.addEventListener('scroll', hideSelectionBar, true);
+    }
+  }
+
+  function checkSelectionBar() {
+    if (!selBar) return;
+    var sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed) {
+      hideSelectionBar();
+      return;
+    }
+    // 检查选区是否在编辑器内
+    if (!Editor.isSelectionInEditor()) {
+      hideSelectionBar();
+      return;
+    }
+    var text = sel.toString();
+    if (!text || text.length === 0) {
+      hideSelectionBar();
+      return;
+    }
+    // 定位浮动条到选区上方
+    var range = sel.getRangeAt(0);
+    var rect = range.getBoundingClientRect();
+    var appRect = $('app').getBoundingClientRect();
+    var barW = selBar.offsetWidth || 120;
+    var barH = selBar.offsetHeight || 36;
+    var left = rect.left + rect.width / 2 - appRect.left - barW / 2;
+    var top = rect.top - appRect.top - barH - 6;
+    // 边界保护
+    left = Math.max(4, Math.min(left, appRect.width - barW - 4));
+    if (top < 4) top = rect.bottom - appRect.top + 6; // 放到选区下方
+    selBar.style.left = left + 'px';
+    selBar.style.top = top + 'px';
+    selBar.style.display = 'flex';
+  }
+
+  function hideSelectionBar() {
+    if (selBar) selBar.style.display = 'none';
+  }
+
   // ---------- 复制弹窗 ----------
   function initCopyPopup() {
     var popup = $('copyPopup');
@@ -205,7 +283,13 @@
       btn.addEventListener('click', function () {
         var action = btn.getAttribute('data-action');
         if (action === 'all') { Editor.copyAll(); closeCopyPopup(); }
-        else if (action === 'selection') { Editor.copySelection(); closeCopyPopup(); }
+        else if (action === 'selection') {
+          if (!Editor.hasSelection()) {
+            toast('请先长按拖动选择文本');
+            return;
+          }
+          Editor.copySelection(); closeCopyPopup();
+        }
         else if (action === 'line') { Editor.copyLine(); closeCopyPopup(); }
         else if (action === 'range') {
           $('copyPopupMain').style.display = 'none';
@@ -231,7 +315,6 @@
     $('copyPopupRange').style.display = 'none';
     popup.style.display = 'flex';
 
-    // 定位 — 确保不超出屏幕
     var pw = popup.offsetWidth || 200;
     var ph = popup.offsetHeight || 180;
     var px = Math.max(4, Math.min(x - appRect.left, appRect.width - pw - 4));
@@ -239,7 +322,6 @@
     popup.style.left = px + 'px';
     popup.style.top = py + 'px';
 
-    // 添加遮罩 — 点击外部关闭
     var old = $('copyOverlay');
     if (old) old.remove();
     var overlay = document.createElement('div');
@@ -341,9 +423,18 @@
       body.textContent = r.text;
       item.appendChild(head);
       item.appendChild(body);
+      // ★ 先关闭面板再跳转，rAF 延迟避免卡顿
       item.addEventListener('click', function () {
-        if (mode === 'project') jumpToProjectResult(r);
-        else Editor.gotoLine(r.lineNo);
+        $('searchPanel').style.display = 'none';
+        if (mode === 'project') {
+          jumpToProjectResult(r);
+        } else {
+          if (global.requestAnimationFrame) {
+            global.requestAnimationFrame(function () { Editor.gotoLine(r.lineNo); });
+          } else {
+            setTimeout(function () { Editor.gotoLine(r.lineNo); }, 16);
+          }
+        }
       });
       box.appendChild(item);
     });
@@ -357,9 +448,13 @@
 
   async function jumpToProjectResult(r) {
     var node = pathMap[r.path];
-    if (!node) { toast('文件未在树中'); return; }
-    await openFile(node, r.lineNo);
-    $('searchPanel').style.display = 'none';
+    if (!node) { toast('文件未在树中：' + r.path); return; }
+    toast('正在打开 ' + r.name + '…', 1500);
+    try {
+      await openFile(node, r.lineNo);
+    } catch (e) {
+      toast('打开失败：' + (e.message || e));
+    }
   }
 
   function searchPrev() {
@@ -537,7 +632,13 @@
       return;
     }
     await doOpenFile(node);
-    if (lineNo) Editor.gotoLine(lineNo);
+    if (lineNo) {
+      if (global.requestAnimationFrame) {
+        global.requestAnimationFrame(function () { Editor.gotoLine(lineNo); });
+      } else {
+        Editor.gotoLine(lineNo);
+      }
+    }
   }
 
   async function doOpenFile(node) {
