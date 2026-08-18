@@ -144,7 +144,7 @@ body {
 .etool-spacer { flex: 1 1 auto; }
 .etool-info { font-size: 11px; color: var(--fg-dim); white-space: nowrap; }
 
-/* ---------------- 编辑器 ---------------- */
+/* ---------------- 编辑器（contenteditable 单层） ---------------- */
 .editor-host { flex: 1; display: flex; min-width: 0; background: var(--bg); overflow: hidden; position: relative; }
 .gutter {
   flex: 0 0 52px; width: 52px; overflow: hidden; background: var(--bg);
@@ -156,25 +156,32 @@ body {
   color: var(--fg-dim); will-change: transform; white-space: pre;
 }
 .code-scroll { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; }
-pre.hl, textarea.ta {
-  margin: 0; border: 0; position: absolute; top: 0; left: 0;
+
+/* ★ contenteditable pre — 单层编辑器，光标与高亮在同一元素 */
+pre.editor-pre {
+  margin: 0; border: 0;
+  position: absolute; top: 0; left: 0;
   width: 100%; height: 100%;
   padding: var(--pad-y) var(--pad-x);
   font-family: var(--mono); font-size: var(--fs); line-height: var(--lh);
-  tab-size: 2; -moz-tab-size: 2; white-space: pre; word-wrap: normal;
-  letter-spacing: normal; overflow: auto;
+  tab-size: 2; -moz-tab-size: 2;
+  white-space: pre; word-wrap: normal; overflow-wrap: normal;
+  overflow: auto; outline: none;
+  color: var(--fg); background: transparent;
+  caret-color: #fff;
+  -webkit-text-size-adjust: 100%;
+  letter-spacing: 0; word-spacing: 0;
+  -webkit-appearance: none; appearance: none;
 }
-pre.hl {
-  pointer-events: none; color: var(--fg); background: transparent; z-index: 1;
-  overflow: hidden;
-}
-textarea.ta {
-  z-index: 2; resize: none; background: transparent; color: transparent;
-  caret-color: #fff; outline: none; overflow: auto;
-}
-textarea.ta::selection { background: #264f78; }
-/* 隐藏原生滚动条 — 用自定义滑块替代 */
-textarea.ta::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+/* 隐藏 contenteditable 原生滚动条 */
+pre.editor-pre::-webkit-scrollbar { width: 0; height: 0; display: none; }
+pre.editor-pre { scrollbar-width: none; }
+
+/* 原生选择高亮（水滴手柄拖选区域） */
+pre.editor-pre::selection { background: #264f78; color: #fff; }
+pre.editor-pre *::selection { background: #264f78; color: #fff; }
+pre.editor-pre::-moz-selection { background: #264f78; color: #fff; }
 
 /* 语法配色 */
 .tok-keyword  { color: #569cd6; }
@@ -187,9 +194,9 @@ textarea.ta::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
 /* 花括号匹配高亮 */
 .bracket-match {
-  background: rgba(255, 200, 0, 0.25);
-  border: 1px solid rgba(255, 200, 0, 0.6);
+  background: rgba(255, 200, 0, 0.3);
   border-radius: 2px;
+  font-weight: bold;
 }
 
 /* 自定义滚动条 */
@@ -204,6 +211,23 @@ textarea.ta::-webkit-scrollbar { width: 0; height: 0; display: none; }
   transition: background 0.15s;
 }
 .custom-scroll-thumb:active { background: rgba(255,255,255,0.4); }
+
+/* ---------------- 选择浮动条（拖选后出现） ---------------- */
+.selection-bar {
+  position: absolute; z-index: 30;
+  display: flex; gap: 2px;
+  background: #2d2d30; border: 1px solid var(--border);
+  border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  padding: 3px;
+}
+.selection-bar button {
+  background: transparent; border: none; color: var(--fg);
+  font-size: 13px; padding: 6px 10px; border-radius: 4px;
+  cursor: pointer; white-space: nowrap; line-height: 1;
+}
+.selection-bar button:active {
+  background: var(--accent); color: #fff;
+}
 
 /* ---------------- 字体缩放工具条 ---------------- */
 .zoom-bar {
