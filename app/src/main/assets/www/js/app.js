@@ -423,16 +423,17 @@
       body.textContent = r.text;
       item.appendChild(head);
       item.appendChild(body);
-      // ★ 先关闭面板再跳转，rAF 延迟避免卡顿
+      // ★ 先关闭面板再跳转，rAF 延迟避免卡顿，传搜索词用于高亮
+      var searchQuery = $('searchInput').value;
       item.addEventListener('click', function () {
         $('searchPanel').style.display = 'none';
         if (mode === 'project') {
-          jumpToProjectResult(r);
+          jumpToProjectResult(r, searchQuery);
         } else {
           if (global.requestAnimationFrame) {
-            global.requestAnimationFrame(function () { Editor.gotoLine(r.lineNo); });
+            global.requestAnimationFrame(function () { Editor.gotoLine(r.lineNo, { highlight: searchQuery, caseSensitive: $('searchCase').checked }); });
           } else {
-            setTimeout(function () { Editor.gotoLine(r.lineNo); }, 16);
+            Editor.gotoLine(r.lineNo, { highlight: searchQuery, caseSensitive: $('searchCase').checked });
           }
         }
       });
@@ -446,12 +447,12 @@
     }
   }
 
-  async function jumpToProjectResult(r) {
+  async function jumpToProjectResult(r, searchQuery) {
     var node = pathMap[r.path];
     if (!node) { toast('文件未在树中：' + r.path); return; }
     toast('正在打开 ' + r.name + '…', 1500);
     try {
-      await openFile(node, r.lineNo);
+      await openFile(node, r.lineNo, searchQuery);
     } catch (e) {
       toast('打开失败：' + (e.message || e));
     }
@@ -646,29 +647,22 @@
     }
   }
 
-  function openFile(node, lineNo) {
+  function openFile(node, lineNo, searchQuery) {
     // 已打开 → 直接切换
     var existing = openTabs.find(function (t) {
       return t.node && t.node.path === node.path;
     });
     if (existing) {
-      switchToTab(existing.id, lineNo);
+      switchToTab(existing.id, lineNo, searchQuery);
       return;
     }
 
-    // 当前有未保存修改 → 弹窗
-    if (dirty && activeTabId) {
-      pendingAction = { type: 'open', node: node, lineNo: lineNo };
-      var curTab = getTab(activeTabId);
-      $('unsavedFileName').textContent = (curTab && curTab.node.name) || '当前文件';
-      $('unsavedModal').style.display = 'flex';
-      return;
-    }
-
-    doOpenFile(node, lineNo);
+    // ★ 不再提醒保存 — 打开新文件时自动保留当前文件的修改状态
+    // saveCurrentTabState() 会在 doOpenFile 中保存当前标签的 dirty 状态
+    doOpenFile(node, lineNo, searchQuery);
   }
 
-  async function doOpenFile(node, lineNo) {
+  async function doOpenFile(node, lineNo, searchQuery) {
     try {
       var content = await currentProject.readFile(node);
       var lang = Highlighter.langFromName(node.name);
@@ -712,10 +706,11 @@
 
       // 跳转到行
       if (lineNo) {
+        var gotoOpts = searchQuery ? { highlight: searchQuery, caseSensitive: $('searchCase').checked } : undefined;
         if (global.requestAnimationFrame) {
-          global.requestAnimationFrame(function () { Editor.gotoLine(lineNo); });
+          global.requestAnimationFrame(function () { Editor.gotoLine(lineNo, gotoOpts); });
         } else {
-          Editor.gotoLine(lineNo);
+          Editor.gotoLine(lineNo, gotoOpts);
         }
       }
     } catch (e) {
@@ -723,7 +718,7 @@
     }
   }
 
-  function switchToTab(tabId, lineNo) {
+  function switchToTab(tabId, lineNo, searchQuery) {
     if (tabId === activeTabId && !lineNo) return;
 
     // 保存当前标签状态
@@ -755,10 +750,11 @@
     updateDirtyState();
 
     if (lineNo) {
+      var gotoOpts = searchQuery ? { highlight: searchQuery, caseSensitive: $('searchCase').checked } : undefined;
       if (global.requestAnimationFrame) {
-        global.requestAnimationFrame(function () { Editor.gotoLine(lineNo); });
+        global.requestAnimationFrame(function () { Editor.gotoLine(lineNo, gotoOpts); });
       } else {
-        Editor.gotoLine(lineNo);
+        Editor.gotoLine(lineNo, gotoOpts);
       }
     }
   }
