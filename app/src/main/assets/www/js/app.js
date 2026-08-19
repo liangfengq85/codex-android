@@ -27,6 +27,121 @@
   var activeTabId = null;
   var pendingAction = null; // { type: 'open'|'close', node?, lineNo?, tabId? }
 
+  // ---- 自动补全：项目标识符 ----
+  var projectIdentifiers = {};   // { name: true }
+  var identifierCache = {};      // { path: { name: true } }
+  var identifierCollecting = false;
+
+  // 从文本中提取标识符
+  function extractIdentifiers(text) {
+    var set = {};
+    if (!text) return set;
+    // 声明模式
+    var patterns = [
+      /\b(?:var|let|const)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/g,
+      /\bfunction\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/g,
+      /\bclass\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/g,
+      /\bstruct\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/g,
+      /\btypedef\s+(?:.*?\s+)?([a-zA-Z_$][a-zA-Z0-9_$]*)\s*(?:;|\{)/g,
+      /#define\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/g,
+      /\b(?:int|char|void|float|double|long|short|unsigned|signed|bool|auto|static|extern)\s+\*?\s*([a-zA-Z_$][a-zA-Z0-9_$]*)/g,
+      /\b(?:def|import|from)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/g,
+      /\benum\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/g,
+      /\b(?:public|private|protected)?\s*(?:static\s+)?(?:final\s+)?(?:void|int|String|boolean|double|float|long|short|byte|char)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(/g,
+    ];
+    patterns.forEach(function (re) {
+      var m;
+      while ((m = re.exec(text)) !== null) {
+        if (m[1] && m[1].length >= 2) set[m[1]] = true;
+      }
+    });
+    // 提取所有 3+ 字符的标识符（兜底）
+    var wordRe = /\b[a-zA-Z_$][a-zA-Z0-9_$]{2,}\b/g;
+    var wm;
+    while ((wm = wordRe.exec(text)) !== null) {
+      set[wm[0]] = true;
+    }
+    return set;
+  }
+
+  // 从当前已打开的标签中收集标识符（同步，快速）
+  function collectOpenTabIdentifiers() {
+    openTabs.forEach(function (tab) {
+      var text = (tab.editorState && tab.editorState.text) || tab.content || '';
+      var ids = extractIdentifiers(text);
+      Object.keys(ids).forEach(function (k) { projectIdentifiers[k] = true; });
+    });
+  }
+
+  // 异步从整个项目收集标识符
+  function collectProjectIdentifiers() {
+    if (!currentProject || identifierCollecting) return;
+    identifierCollecting = true;
+    projectIdentifiers = {};
+    identifierCache = {};
+
+    // 先从已打开标签同步收集
+    collectOpenTabIdentifiers();
+
+    // 异步遍历项目文件
+    currentProject.walkFiles(function (f) {
+      if (identifierCache[f.path]) {
+        Object.keys(identifierCache[f.path]).forEach(function (k) { projectIdentifiers[k] = true; });
+        return Promise.resolve();
+      }
+      try {
+        var c = f.getContent();
+        if (c && typeof c.then === 'function') {
+          return c.then(function (text) {
+            if (text) {
+              var ids = extractIdentifiers(text);
+              identifierCache[f.path] = ids;
+              Object.keys(ids).forEach(function (k) { projectIdentifiers[k] = true; });
+            }
+          }).catch(function () {});
+        } else if (c) {
+          var ids = extractIdentifiers(c);
+          identifierCache[f.path] = ids;
+          Object.keys(ids).forEach(function (k) { projectIdentifiers[k] = true; });
+        }
+      } catch (e) {}
+      return Promise.resolve();
+    }).then(function () {
+      identifierCollecting = false;
+    }).catch(function () {
+      identifierCollecting = false;
+    });
+  }
+
+  // 获取补全建议
+  function getSuggestions(prefix) {
+    if (!prefix || prefix.length < 2) return [];
+    var lower = prefix.toLowerCase();
+    var exact = [], prefixMatch = [], contains = [];
+    Object.keys(projectIdentifiers).forEach(function (name) {
+      if (name === prefix) { exact.push(name); return; }
+      if (name.startsWith(prefix)) { prefixMatch.push(name); return; }
+      if (name.toLowerCase().startsWith(lower)) { contains.push(name); return; }
+    });
+    // 排序：精确 > 前缀匹配 > 大小写不敏感匹配
+    prefixMatch.sort(function (a, b) { return a.length - b.length; });
+    contains.sort(function (a, b) { return a.length - b.length; });
+    return exact.concat(prefixMatch).concat(contains).slice(0, 12);
+  }
+
+  // 从当前编辑器内容更新标识符（编辑时调用）
+  function updateCurrentFileIdentifiers() {
+    var text = Editor.getValue();
+    var ids = extractIdentifiers(text);
+    if (currentNode && currentNode.path) {
+      identifierCache[currentNode.path] = ids;
+    }
+    Object.keys(ids).forEach(function (k) { projectIdentifiers[k] = true; });
+  }
+
+  // 防抖更新标识符（避免每次输入都重新提取）
+  var debouncedUpdateIdentifiers = debounce(updateCurrentFileIdentifiers, 800);
+
   // ---------- 工具 ----------
   function toast(msg, ms) {
     var t = $('toast');
@@ -44,7 +159,8 @@
   // ---------- 初始化 ----------
   function init() {
     Editor.mount($('editorHost'));
-    Editor.setOnChange(function () { updateDirtyState(); });
+    Editor.setOnChange(function () { updateDirtyState(); debouncedUpdateIdentifiers(); });
+    Editor.setSuggestProvider(getSuggestions);
     Editor.setOnZoom(function (fs) { $('zoomSize').textContent = fs; });
     Editor.setOnUndoChanged(function (canUndo, canRedo) {
       $('btnUndo').disabled = !canUndo;
@@ -362,6 +478,7 @@
   function runSearch() {
     var q = $('searchInput').value;
     if (!q) { $('searchStats').textContent = ''; $('searchResults').innerHTML = ''; return; }
+    Editor.clearSearchHit(); // 清除上次搜索高亮
     if (searchMode === 'file') searchInFile(q);
     else searchInProject(q);
   }
@@ -547,6 +664,8 @@
       var root = await proj.buildTree();
       buildPathMap(root);
       renderTree(root);
+      // 异步收集项目标识符用于自动补全
+      collectProjectIdentifiers();
     } catch (e) {
       toast('加载目录失败：' + (e.message || e));
       renderTree({ name: proj.name, type: 'dir', children: [] });
@@ -696,6 +815,11 @@
 
       Editor.open(node, content, lang);
       $('btnSaveEditor').disabled = true;
+
+      // 收集此文件的标识符用于自动补全
+      var ids = extractIdentifiers(content);
+      identifierCache[node.path] = ids;
+      Object.keys(ids).forEach(function (k) { projectIdentifiers[k] = true; });
 
       // 更新树高亮
       document.querySelectorAll('.tree-row.active').forEach(function (r) { r.classList.remove('active'); });
