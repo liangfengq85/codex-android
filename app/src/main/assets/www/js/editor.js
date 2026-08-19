@@ -1,23 +1,16 @@
 /* =========================================================================
  * editor.js — 编辑器（textarea + pre 叠层架构）
  *
- * 核心改进：弃用 contenteditable，改用 textarea（输入）+ pre（高亮）叠层
- *   → textarea 有原生键盘支持，Android 上打字无障碍
- *   → pre 只做语法高亮显示，pointer-events:none，不影响 textarea
- *   → 两者排版完全一致（font/padding/line-height/white-space），光标完美对齐
- *   → pre.innerHTML 的重渲染不会破坏 textarea 的选区/IME
- *
- * 功能：
- *   - textarea 输入 + pre 语法高亮（输入后立即重渲染，安全）
- *   - 行号 / 同步滚动 / Tab 缩进
- *   - 文件内查找（find / findNext / findPrev）
- *   - 字体缩放（按钮 + 双指捏合 + Ctrl+/-/0）
- *   - 撤回 / 重做（按修改顺序逐步撤回，连续字符 500ms 内分组）
+ * 核心改进：
+ *   - textarea（输入）+ pre（高亮）叠层 → 原生键盘支持，光标对齐
+ *   - 搜索高亮持久显示（不自动消失，直到下次搜索）
+ *   - Enter 自动缩进（继承上行缩进，{ 后 +2 空格）
+ *   - 代码自动补全（输入时弹出项目标识符提示，Tab/点击补全）
+ *   - 撤回/重做（按修改顺序逐步撤回）
  *   - 花括号匹配高亮
  *   - 自定义右侧拖拽滑块
- *   - 光标位置跟踪（行:列）
- *   - IME 组合输入保护（composition 期间不 push undo）
- *   - saveState / restoreState（多标签页切换）
+ *   - 字体缩放（按钮 + 双指捏合 + Ctrl+/-/0）
+ *   - IME 组合输入保护
  * ========================================================================= */
 (function (global) {
   'use strict';
@@ -47,15 +40,22 @@
   // ---- 花括号匹配 ----
   var currentBracketMatch = null;
 
-  // ---- 搜索跳转高亮 ----
+  // ---- 搜索跳转高亮（持久，不自动清除） ----
   var searchHitRange = null;   // [startPos, endPos]
-  var searchHitTimer = null;
 
   // ---- 光标跟踪 ----
   var onCursorCb = null;
 
   // ---- 捏合缩放 ----
   var pinchDist = 0, pinchFs = 0;
+
+  // ---- 自动补全 ----
+  var suggestProvider = null;   // function(prefix) → string[]
+  var suggestPopup = null;
+  var suggestList = [];
+  var suggestIdx = -1;
+  var suggestVisible = false;
+  var suggestDebounceTimer = null;
 
   // ======================== 文本 Get/Set ========================
   function getText() {
@@ -163,7 +163,6 @@
     var now = Date.now();
     var diff = curText.length - (last ? last.text.length : 0);
 
-    // 分组：单字符插入，无选区，500ms 内
     var shouldGroup = lastInputWasSimple &&
                       diff === 1 &&
                       (now - lastInputTime) < 500 &&
@@ -225,12 +224,10 @@
   function checkBracketAtCursor() {
     var pos = textarea.selectionStart;
     var text = textarea.value;
-    // 光标前一个字符
     if (pos > 0 && BRACKETS[text[pos - 1]]) {
       var m = findMatchingBracket(text, pos - 1);
       if (m >= 0) return [pos - 1, m];
     }
-    // 光标处的字符
     if (pos < text.length && BRACKETS[text[pos]]) {
       var m2 = findMatchingBracket(text, pos);
       if (m2 >= 0) return [pos, m2];
@@ -285,7 +282,7 @@
     toReplace.forEach(function (r) { r.old.parentNode.replaceChild(r.frag, r.old); });
   }
 
-  // ======================== 搜索高亮（单范围） ========================
+  // ======================== 搜索高亮（持久，单范围） ========================
   function highlightRangeInDom(codeEl, range, className) {
     if (!range || range.length < 2) return;
     var start = range[0], end = range[1];
@@ -296,23 +293,19 @@
         var text = node.nodeValue;
         var nodeEnd = rawPos + text.length;
         if (nodeEnd > start && rawPos < end) {
-          // 有交集
           var frag = document.createDocumentFragment();
           var i = 0;
-          // 前面不受影响的部分
           if (rawPos < start) {
             var cut = start - rawPos;
             frag.appendChild(document.createTextNode(text.slice(0, cut)));
             i = cut;
           }
-          // 高亮部分
           var hlEnd = Math.min(end, nodeEnd) - rawPos;
           var sp = document.createElement('span');
           sp.className = className;
           sp.textContent = text.slice(i, hlEnd);
           frag.appendChild(sp);
           i = hlEnd;
-          // 后面不受影响的部分
           if (i < text.length) frag.appendChild(document.createTextNode(text.slice(i)));
           toReplace.push({ old: node, frag: frag });
         }
@@ -325,6 +318,150 @@
     }
     walk(codeEl);
     toReplace.forEach(function (r) { r.old.parentNode.replaceChild(r.frag, r.old); });
+  }
+
+  // ======================== 自动补全 ========================
+  function buildSuggestPopup() {
+    suggestPopup = document.createElement('div');
+    suggestPopup.className = 'autocomplete-popup';
+    suggestPopup.style.display = 'none';
+    var app = document.getElementById('app');
+    if (app) app.appendChild(suggestPopup);
+    else document.body.appendChild(suggestPopup);
+  }
+
+  function getWordAtCursor() {
+    var pos = textarea.selectionStart;
+    var text = textarea.value;
+    var start = pos;
+    while (start > 0) {
+      var c = text[start - 1];
+      if (/[a-zA-Z0-9_$]/.test(c)) start--;
+      else break;
+    }
+    var prefix = text.substring(start, pos);
+    return { start: start, end: pos, prefix: prefix };
+  }
+
+  function checkSuggestions() {
+    if (!suggestProvider || composing) { hideSuggestions(); return; }
+    var word = getWordAtCursor();
+    if (word.prefix.length < 2) { hideSuggestions(); return; }
+    var suggestions = suggestProvider(word.prefix);
+    if (!suggestions || suggestions.length === 0) { hideSuggestions(); return; }
+    suggestList = suggestions.slice(0, 12);
+    suggestIdx = 0;
+    suggestVisible = true;
+    renderSuggestPopup();
+  }
+
+  function renderSuggestPopup() {
+    if (!suggestPopup) return;
+    suggestPopup.innerHTML = '';
+    suggestList.forEach(function (s, i) {
+      var item = document.createElement('div');
+      item.className = 'ac-item' + (i === suggestIdx ? ' active' : '');
+      // Highlight matching prefix
+      var prefixLen = getWordAtCursor().prefix.length;
+      var prefixPart = s.substring(0, prefixLen);
+      var restPart = s.substring(prefixLen);
+      if (prefixPart && s.substring(0, prefixLen).toLowerCase() === getWordAtCursor().prefix.toLowerCase()) {
+        item.innerHTML = '<span class="ac-match">' + escapeHtmlInline(prefixPart) + '</span>' +
+                         '<span class="ac-rest">' + escapeHtmlInline(restPart) + '</span>';
+      } else {
+        item.textContent = s;
+      }
+      item.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        insertSuggestion(s);
+      });
+      suggestPopup.appendChild(item);
+    });
+    positionSuggestPopup();
+    suggestPopup.style.display = 'block';
+  }
+
+  function escapeHtmlInline(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function positionSuggestPopup() {
+    if (!suggestPopup || !textarea) return;
+    var pos = textarea.selectionStart;
+    var text = textarea.value.substring(0, pos);
+    var lines = text.split('\n');
+    var lineNum = lines.length - 1;
+    var colNum = lines[lines.length - 1].length;
+
+    var lh = Math.round(fontSize * 1.5);
+    var charW = fontSize * 0.602; // monospace approximate
+
+    var taRect = textarea.getBoundingClientRect();
+    var appEl = document.getElementById('app') || document.body;
+    var appRect = appEl.getBoundingClientRect();
+
+    var x = taRect.left - appRect.left + 12 + colNum * charW - textarea.scrollLeft;
+    var y = taRect.top - appRect.top + 8 + (lineNum + 1) * lh - textarea.scrollTop;
+
+    var popupH = Math.min(suggestList.length * 34 + 8, 220);
+    var popupW = 220;
+
+    // If popup goes off bottom, show above cursor
+    if (y + popupH > appRect.height - 50) {
+      y = y - lh - popupH - 4;
+    }
+    if (y < 4) y = 4;
+
+    // Keep popup in view horizontally
+    if (x + popupW > appRect.width - 4) {
+      x = appRect.width - popupW - 4;
+    }
+    if (x < 4) x = 4;
+
+    suggestPopup.style.left = Math.round(x) + 'px';
+    suggestPopup.style.top = Math.round(y) + 'px';
+  }
+
+  function hideSuggestions() {
+    if (suggestPopup) suggestPopup.style.display = 'none';
+    suggestVisible = false;
+    suggestIdx = -1;
+  }
+
+  function insertSuggestion(suggestion) {
+    var word = getWordAtCursor();
+    var val = textarea.value;
+    // Replace the current prefix with the full suggestion
+    var insertText = suggestion;
+    textarea.value = val.substring(0, word.start) + insertText + val.substring(word.end);
+    textarea.selectionStart = textarea.selectionEnd = word.start + insertText.length;
+    hideSuggestions();
+    renderHighlight();
+    syncScroll();
+    updateCursorInfo();
+    updateBracketMatch();
+    if (onChangeCb) onChangeCb(currentFile, getText());
+    pushUndo();
+  }
+
+  function moveSuggest(dir) {
+    if (!suggestVisible || suggestList.length === 0) return;
+    suggestIdx = (suggestIdx + dir + suggestList.length) % suggestList.length;
+    var items = suggestPopup.querySelectorAll('.ac-item');
+    items.forEach(function (el, i) {
+      el.classList.toggle('active', i === suggestIdx);
+    });
+    var active = items[suggestIdx];
+    if (active && suggestPopup) {
+      var popupRect = suggestPopup.getBoundingClientRect();
+      var itemRect = active.getBoundingClientRect();
+      if (itemRect.top < popupRect.top) {
+        active.scrollIntoView(true);
+      } else if (itemRect.bottom > popupRect.bottom) {
+        active.scrollIntoView(false);
+      }
+    }
   }
 
   // ======================== 光标信息 ========================
@@ -347,6 +484,8 @@
     pre.scrollLeft = textarea.scrollLeft;
     if (gutterInner) gutterInner.style.transform = 'translateY(' + (-textarea.scrollTop) + 'px)';
     updateScrollbar();
+    // Reposition suggestion popup on scroll
+    if (suggestVisible) positionSuggestPopup();
   }
 
   // ======================== 自定义滚动条 ========================
@@ -420,12 +559,10 @@
     scrollBox = document.createElement('div');
     scrollBox.className = 'code-scroll';
 
-    // ★ pre — 语法高亮层（pointer-events:none，不接收触摸）
     pre = document.createElement('pre');
     pre.className = 'highlight-pre';
     pre.setAttribute('aria-hidden', 'true');
 
-    // ★ textarea — 输入层（透明文字，白色光标，原生键盘支持）
     textarea = document.createElement('textarea');
     textarea.className = 'editor-ta';
     textarea.spellcheck = false;
@@ -442,6 +579,7 @@
     container.appendChild(scrollBox);
 
     buildScrollbar();
+    buildSuggestPopup();
 
     // ---- 事件 ----
     textarea.addEventListener('input', onInput);
@@ -449,14 +587,21 @@
     textarea.addEventListener('keydown', onKeydown);
     textarea.addEventListener('keyup', onKeyup);
     textarea.addEventListener('click', function () {
-      setTimeout(function () { updateBracketMatch(); updateCursorInfo(); }, 0);
+      setTimeout(function () {
+        updateBracketMatch();
+        updateCursorInfo();
+        hideSuggestions();
+      }, 0);
     });
     textarea.addEventListener('select', function () {
       setTimeout(function () { updateBracketMatch(); updateCursorInfo(); }, 0);
     });
+    textarea.addEventListener('blur', function () {
+      setTimeout(function () { hideSuggestions(); }, 200);
+    });
 
     // IME 组合输入保护
-    textarea.addEventListener('compositionstart', function () { composing = true; });
+    textarea.addEventListener('compositionstart', function () { composing = true; hideSuggestions(); });
     textarea.addEventListener('compositionend', function () {
       composing = false;
       renderHighlight();
@@ -491,18 +636,47 @@
 
   // ======================== 事件处理 ========================
   function onInput(e) {
-    // 立即重渲染高亮（安全：pre 是独立元素，不影响 textarea）
     renderHighlight();
     syncScroll();
     updateCursorInfo();
     if (onChangeCb) onChangeCb(currentFile, getText());
 
-    if (composing) return; // IME 组合期间不 push undo
+    if (composing) return;
 
     pushUndo();
+
+    // 自动补全检测（防抖 150ms）
+    if (suggestDebounceTimer) clearTimeout(suggestDebounceTimer);
+    suggestDebounceTimer = setTimeout(function () {
+      checkSuggestions();
+    }, 150);
   }
 
   function onKeydown(e) {
+    // ---- 自动补全导航 ----
+    if (suggestVisible && suggestList.length > 0) {
+      if (e.key === 'Tab' || e.key === 'Enter') {
+        e.preventDefault();
+        insertSuggestion(suggestList[suggestIdx]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        hideSuggestions();
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        moveSuggest(1);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveSuggest(-1);
+        return;
+      }
+    }
+
     if (e.key === 'Tab') {
       e.preventDefault();
       var start = textarea.selectionStart;
@@ -514,8 +688,33 @@
       syncScroll();
       if (onChangeCb) onChangeCb(currentFile, getText());
       pushUndo();
+    } else if (e.key === 'Enter') {
+      // ---- 自动缩进 ----
+      e.preventDefault();
+      var start = textarea.selectionStart;
+      var end = textarea.selectionEnd;
+      var val = textarea.value;
+      var lineStart = val.lastIndexOf('\n', start - 1) + 1;
+      var currentLine = val.substring(lineStart, start);
+      var indentMatch = currentLine.match(/^\s*/);
+      var indent = indentMatch ? indentMatch[0] : '';
+      var trimmed = currentLine.trim();
+      // { ( [ 结尾 → 加一级缩进
+      if (trimmed.endsWith('{') || trimmed.endsWith('(') || trimmed.endsWith('[')) {
+        indent += '  ';
+      }
+      var insertText = '\n' + indent;
+      textarea.value = val.substring(0, start) + insertText + val.substring(end);
+      textarea.selectionStart = textarea.selectionEnd = start + insertText.length;
+      renderHighlight();
+      syncScroll();
+      updateCursorInfo();
+      if (onChangeCb) onChangeCb(currentFile, getText());
+      pushUndo();
+      hideSuggestions();
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault();
+      hideSuggestions();
       global.App && global.App.openSearch();
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
@@ -523,9 +722,11 @@
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       undo();
+      hideSuggestions();
     } else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
       e.preventDefault();
       redo();
+      hideSuggestions();
     } else if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
       e.preventDefault(); zoomIn();
     } else if ((e.ctrlKey || e.metaKey) && e.key === '-') {
@@ -533,7 +734,6 @@
     } else if ((e.ctrlKey || e.metaKey) && e.key === '0') {
       e.preventDefault(); zoomReset();
     }
-    // Enter 键不拦截 — textarea 原生处理换行
   }
 
   function onKeyup(e) {
@@ -541,6 +741,7 @@
         e.key === 'PageUp' || e.key === 'PageDown') {
       updateBracketMatch();
       updateCursorInfo();
+      hideSuggestions();
     }
   }
 
@@ -585,6 +786,8 @@
       currentFile = file;
       lang = language || 'text';
       currentBracketMatch = null;
+      searchHitRange = null;
+      hideSuggestions();
       textarea.blur();
       setText(content || '');
       initUndo();
@@ -616,6 +819,8 @@
     restoreState: function (state) {
       lang = state.lang || 'text';
       currentBracketMatch = state.bracketMatch || null;
+      searchHitRange = null;
+      hideSuggestions();
       textarea.value = state.text || '';
       renderHighlight();
       textarea.scrollTop = state.scrollTop || 0;
@@ -725,7 +930,6 @@
       var lineLen = 0;
       for (var i = pos; i < text.length && text[i] !== '\n'; i++) lineLen++;
 
-      // 不 focus → 不弹键盘
       textarea.setSelectionRange(pos, pos + lineLen);
 
       var lh = parseFloat(getComputedStyle(textarea).lineHeight) || 20;
@@ -734,7 +938,7 @@
       updateBracketMatch();
       updateCursorInfo();
 
-      // ★ 搜索词高亮
+      // ★ 搜索词高亮（持久显示，不自动清除）
       if (opts.highlight) {
         var lineText = text.substr(pos, lineLen);
         var caseSensitive = opts.caseSensitive || false;
@@ -744,15 +948,22 @@
         if (m) {
           searchHitRange = [pos + m.index, pos + m.index + m[0].length];
           renderHighlight();
-          // 3 秒后自动清除高亮
-          if (searchHitTimer) clearTimeout(searchHitTimer);
-          searchHitTimer = setTimeout(function () {
-            searchHitRange = null;
-            renderHighlight();
-          }, 3000);
+          // 高亮持续显示，不设定时器清除
         }
       }
     },
+
+    // 清除搜索高亮（下次搜索或打开新文件时调用）
+    clearSearchHit: function () {
+      if (searchHitRange) {
+        searchHitRange = null;
+        renderHighlight();
+      }
+    },
+
+    // ---- 自动补全 ----
+    setSuggestProvider: function (cb) { suggestProvider = cb; },
+    hideSuggestions: hideSuggestions,
   };
 
   // ======================== 内部：搜索匹配选择 ========================
