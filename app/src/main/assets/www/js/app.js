@@ -783,7 +783,10 @@
 
   async function doOpenFile(node, lineNo, searchQuery) {
     try {
-      var content = await currentProject.readFile(node);
+      var rawContent = await currentProject.readFile(node);
+      // ★ 规范化行尾符：textarea 会把 \r\n 规范化为 \n，
+      //   如果 savedValue 保留 \r\n 会导致 dirty 永远为 true
+      var content = rawContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       var lang = Highlighter.langFromName(node.name);
 
       // 保存当前标签状态
