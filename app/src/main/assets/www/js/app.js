@@ -2,10 +2,11 @@
  * app.js — 主控制器
  *
  * 改进：
- *   - 搜索结果点击 → 先关闭面板再跳转，requestAnimationFrame 延迟避免卡顿
- *   - 新增选择浮动条：拖选文本后自动出现"复制"按钮
- *   - 移除 contextmenu 拦截 → 允许原生长按选择（水滴手柄）
- *   - 撤回/重做按钮状态适配新编辑器
+ *   - 多标签页（VS Code 式）：openTabs / switchToTab / closeTab / renderTabBar
+ *   - 适配 textarea+pre 叠层编辑器（Editor.saveState/restoreState 用于切换标签）
+ *   - 搜索结果点击 → 先关闭面板再跳转
+ *   - 选择浮动条：拖选文本后自动出现"复制"按钮
+ *   - 未保存提示支持「切换文件」和「关闭标签」两种场景
  * ========================================================================= */
 (function (global) {
   'use strict';
@@ -18,10 +19,13 @@
   var dirty = false;
   var savedValue = '';
   var searchMode = 'file';
-  var pendingFileNode = null;
-  var pendingLineNo = null;
   var selBar = null;
   var selTimer = null;
+
+  // ---- 多标签页 ----
+  var openTabs = [];      // [{ id, node, content, lang, savedValue, dirty, editorState }]
+  var activeTabId = null;
+  var pendingAction = null; // { type: 'open'|'close', node?, lineNo?, tabId? }
 
   // ---------- 工具 ----------
   function toast(msg, ms) {
@@ -98,8 +102,7 @@
     });
     $('btnUnsavedCancel').addEventListener('click', function () {
       $('unsavedModal').style.display = 'none';
-      pendingFileNode = null;
-      pendingLineNo = null;
+      pendingAction = null;
     });
 
     // 搜索面板
@@ -139,6 +142,12 @@
   function updateDirtyState() {
     dirty = Editor.getValue() !== savedValue;
     $('btnSaveEditor').disabled = !dirty;
+    // 同步到当前标签
+    if (activeTabId) {
+      var tab = getTab(activeTabId);
+      if (tab) tab.dirty = dirty;
+    }
+    renderTabBar();
     updateBreadcrumb();
   }
 
@@ -215,15 +224,8 @@
     });
     $('selBarAll').addEventListener('click', function () {
       Editor.focus();
-      // 全选编辑器内容
-      var pre = Editor.getPre();
-      if (pre) {
-        var range = document.createRange();
-        range.selectNodeContents(pre);
-        var sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
-      }
+      var ta = Editor.getTextarea();
+      if (ta) { ta.setSelectionRange(0, ta.value.length); }
     });
 
     // 监听选区变化
@@ -241,32 +243,30 @@
 
   function checkSelectionBar() {
     if (!selBar) return;
-    var sel = window.getSelection();
-    if (!sel || !sel.rangeCount || sel.isCollapsed) {
+    if (!Editor.hasSelection()) {
       hideSelectionBar();
       return;
     }
-    // 检查选区是否在编辑器内
-    if (!Editor.isSelectionInEditor()) {
+    var ta = Editor.getTextarea();
+    if (!ta || document.activeElement !== ta) {
       hideSelectionBar();
       return;
     }
-    var text = sel.toString();
+    var text = ta.value.substring(ta.selectionStart, ta.selectionEnd);
     if (!text || text.length === 0) {
       hideSelectionBar();
       return;
     }
     // 定位浮动条到选区上方
-    var range = sel.getRangeAt(0);
-    var rect = range.getBoundingClientRect();
+    var taRect = ta.getBoundingClientRect();
     var appRect = $('app').getBoundingClientRect();
     var barW = selBar.offsetWidth || 120;
     var barH = selBar.offsetHeight || 36;
-    var left = rect.left + rect.width / 2 - appRect.left - barW / 2;
-    var top = rect.top - appRect.top - barH - 6;
-    // 边界保护
+    // 简单定位到编辑器区域中间偏上
+    var left = taRect.left - appRect.left + taRect.width / 2 - barW / 2;
+    var top = taRect.top - appRect.top + 10;
     left = Math.max(4, Math.min(left, appRect.width - barW - 4));
-    if (top < 4) top = rect.bottom - appRect.top + 6; // 放到选区下方
+    if (top < 4) top = taRect.bottom - appRect.top - barH - 10;
     selBar.style.left = left + 'px';
     selBar.style.top = top + 'px';
     selBar.style.display = 'flex';
@@ -475,10 +475,14 @@
 
   // ---------- 未保存提示 ----------
   function resolvePending() {
-    if (!pendingFileNode) return;
-    var n = pendingFileNode, ln = pendingLineNo;
-    pendingFileNode = null; pendingLineNo = null;
-    doOpenFile(n).then(function () { if (ln) Editor.gotoLine(ln); });
+    if (!pendingAction) return;
+    var action = pendingAction;
+    pendingAction = null;
+    if (action.type === 'close') {
+      doCloseTab(action.tabId);
+    } else if (action.type === 'open') {
+      if (action.node) doOpenFile(action.node, action.lineNo);
+    }
   }
 
   // ---------- 外部文件 ----------
@@ -497,7 +501,7 @@
       },
       walkFiles: function () { return Promise.resolve(); },
     };
-    doOpenFile(node);
+    openFile(node);
   }
 
   // ---------- 项目 ----------
@@ -546,11 +550,16 @@
       toast('加载目录失败：' + (e.message || e));
       renderTree({ name: proj.name, type: 'dir', children: [] });
     }
+
+    // 关闭所有标签
+    openTabs = [];
+    activeTabId = null;
     currentNode = null;
     savedValue = '';
     Editor.open(null, '', 'text');
     dirty = false;
     $('btnSaveEditor').disabled = true;
+    renderTabBar();
     updateBreadcrumb();
   }
 
@@ -622,16 +631,129 @@
     return '📄';
   }
 
-  // ---------- 打开 / 保存 ----------
-  async function openFile(node, lineNo) {
-    if (dirty && currentNode && node !== currentNode) {
-      pendingFileNode = node;
-      pendingLineNo = lineNo;
-      $('unsavedFileName').textContent = currentNode.name || '当前文件';
+  // ======================== 多标签页 ========================
+
+  function getTab(id) {
+    return openTabs.find(function (t) { return t.id === id; });
+  }
+
+  function saveCurrentTabState() {
+    if (!activeTabId) return;
+    var tab = getTab(activeTabId);
+    if (tab) {
+      tab.editorState = Editor.saveState();
+      tab.dirty = dirty;
+    }
+  }
+
+  function openFile(node, lineNo) {
+    // 已打开 → 直接切换
+    var existing = openTabs.find(function (t) {
+      return t.node && t.node.path === node.path;
+    });
+    if (existing) {
+      switchToTab(existing.id, lineNo);
+      return;
+    }
+
+    // 当前有未保存修改 → 弹窗
+    if (dirty && activeTabId) {
+      pendingAction = { type: 'open', node: node, lineNo: lineNo };
+      var curTab = getTab(activeTabId);
+      $('unsavedFileName').textContent = (curTab && curTab.node.name) || '当前文件';
       $('unsavedModal').style.display = 'flex';
       return;
     }
-    await doOpenFile(node);
+
+    doOpenFile(node, lineNo);
+  }
+
+  async function doOpenFile(node, lineNo) {
+    try {
+      var content = await currentProject.readFile(node);
+      var lang = Highlighter.langFromName(node.name);
+
+      // 保存当前标签状态
+      saveCurrentTabState();
+
+      // 创建新标签
+      var tabId = 'tab_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+      var newTab = {
+        id: tabId,
+        node: node,
+        content: content,
+        lang: lang,
+        savedValue: content,
+        dirty: false,
+        editorState: null
+      };
+      openTabs.push(newTab);
+
+      // 切换到新标签
+      activeTabId = tabId;
+      currentNode = node;
+      savedValue = content;
+      dirty = false;
+
+      // 显示编辑器
+      $('welcome').style.display = 'none';
+      $('editorWrap').style.display = 'flex';
+      $('zoomBar').style.display = 'flex';
+
+      Editor.open(node, content, lang);
+      $('btnSaveEditor').disabled = true;
+
+      // 更新树高亮
+      document.querySelectorAll('.tree-row.active').forEach(function (r) { r.classList.remove('active'); });
+      if (node._row) node._row.classList.add('active');
+
+      renderTabBar();
+      updateBreadcrumb();
+
+      // 跳转到行
+      if (lineNo) {
+        if (global.requestAnimationFrame) {
+          global.requestAnimationFrame(function () { Editor.gotoLine(lineNo); });
+        } else {
+          Editor.gotoLine(lineNo);
+        }
+      }
+    } catch (e) {
+      toast('读取失败：' + (e.message || e));
+    }
+  }
+
+  function switchToTab(tabId, lineNo) {
+    if (tabId === activeTabId && !lineNo) return;
+
+    // 保存当前标签状态
+    saveCurrentTabState();
+
+    var tab = getTab(tabId);
+    if (!tab) return;
+
+    activeTabId = tabId;
+    currentNode = tab.node;
+    savedValue = tab.savedValue;
+    dirty = tab.dirty;
+
+    // 恢复编辑器状态
+    if (tab.editorState) {
+      Editor.restoreState(tab.editorState);
+    } else {
+      Editor.open(tab.node, tab.content, tab.lang);
+    }
+
+    $('btnSaveEditor').disabled = !dirty;
+
+    // 更新树高亮
+    document.querySelectorAll('.tree-row.active').forEach(function (r) { r.classList.remove('active'); });
+    if (tab.node._row) tab.node._row.classList.add('active');
+
+    renderTabBar();
+    updateBreadcrumb();
+    updateDirtyState();
+
     if (lineNo) {
       if (global.requestAnimationFrame) {
         global.requestAnimationFrame(function () { Editor.gotoLine(lineNo); });
@@ -641,27 +763,116 @@
     }
   }
 
-  async function doOpenFile(node) {
-    try {
-      var content = await currentProject.readFile(node);
-      var lang = Highlighter.langFromName(node.name);
-      currentNode = node;
-      savedValue = content;
-      dirty = false;
-      $('btnSaveEditor').disabled = true;
-      Editor.open(node, content, lang);
-      document.querySelectorAll('.tree-row.active').forEach(function (r) { r.classList.remove('active'); });
-      if (node._row) node._row.classList.add('active');
-      updateBreadcrumb();
-    } catch (e) {
-      toast('读取失败：' + (e.message || e));
+  function closeTab(tabId) {
+    var tab = getTab(tabId);
+    if (!tab) return;
+
+    // 如果要关闭的是当前标签且有未保存修改 → 弹窗
+    if (tabId === activeTabId && tab.dirty) {
+      pendingAction = { type: 'close', tabId: tabId };
+      $('unsavedFileName').textContent = tab.node.name || '当前文件';
+      $('unsavedModal').style.display = 'flex';
+      return;
     }
+
+    // 如果要关闭的不是当前标签但该标签有未保存修改
+    if (tabId !== activeTabId && tab.dirty) {
+      // 先切换过去再弹窗
+      switchToTab(tabId);
+      pendingAction = { type: 'close', tabId: tabId };
+      $('unsavedFileName').textContent = tab.node.name || '当前文件';
+      $('unsavedModal').style.display = 'flex';
+      return;
+    }
+
+    doCloseTab(tabId);
   }
 
+  function doCloseTab(tabId) {
+    var idx = openTabs.findIndex(function (t) { return t.id === tabId; });
+    if (idx === -1) return;
+
+    openTabs.splice(idx, 1);
+
+    if (activeTabId === tabId) {
+      if (openTabs.length > 0) {
+        var newIdx = Math.min(idx, openTabs.length - 1);
+        switchToTab(openTabs[newIdx].id);
+      } else {
+        // 没有标签了
+        activeTabId = null;
+        currentNode = null;
+        savedValue = '';
+        dirty = false;
+        $('welcome').style.display = 'flex';
+        $('editorWrap').style.display = 'none';
+        $('zoomBar').style.display = 'none';
+        Editor.open(null, '', 'text');
+        $('btnSaveEditor').disabled = true;
+      }
+    }
+
+    renderTabBar();
+    updateBreadcrumb();
+  }
+
+  function renderTabBar() {
+    var bar = $('tabBar');
+    if (!bar) return;
+    bar.innerHTML = '';
+
+    openTabs.forEach(function (tab) {
+      var el = document.createElement('div');
+      el.className = 'tab' + (tab.id === activeTabId ? ' active' : '');
+
+      var icon = document.createElement('span');
+      icon.className = 'tab-icon';
+      icon.textContent = fileEmoji(tab.node.name);
+      el.appendChild(icon);
+
+      var name = document.createElement('span');
+      name.className = 'tab-name';
+      name.textContent = tab.node.name;
+      el.appendChild(name);
+
+      // 未保存标记
+      if (tab.dirty) {
+        var dot = document.createElement('span');
+        dot.className = 'tab-dirty';
+        dot.textContent = '●';
+        el.appendChild(dot);
+      }
+
+      // 关闭按钮
+      var closeBtn = document.createElement('button');
+      closeBtn.className = 'tab-close';
+      closeBtn.textContent = '✕';
+      closeBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        closeTab(tab.id);
+      });
+      el.appendChild(closeBtn);
+
+      // 点击切换
+      el.addEventListener('click', function () { switchToTab(tab.id); });
+
+      bar.appendChild(el);
+    });
+
+    // 填充剩余空间
+    var spacer = document.createElement('div');
+    spacer.className = 'tab-spacer';
+    bar.appendChild(spacer);
+  }
+
+  // ---------- 打开 / 保存 ----------
   function updateBreadcrumb() {
     var dot = dirty ? ' ●' : '';
-    if (currentNode) $('breadcrumb').textContent = currentProject.name + ' / ' + currentNode.path + dot;
-    else $('breadcrumb').textContent = currentProject ? (currentProject.name + dot) : '未打开文件';
+    if (currentNode) {
+      $('breadcrumb').textContent = currentProject.name + ' / ' + currentNode.path + dot;
+    } else {
+      $('breadcrumb').textContent = currentProject ? (currentProject.name + dot) : '未打开文件';
+    }
   }
 
   async function saveCurrent() {
@@ -672,6 +883,15 @@
       savedValue = text;
       dirty = false;
       $('btnSaveEditor').disabled = true;
+      // 更新标签状态
+      if (activeTabId) {
+        var tab = getTab(activeTabId);
+        if (tab) {
+          tab.savedValue = text;
+          tab.dirty = false;
+        }
+      }
+      renderTabBar();
       updateBreadcrumb();
       toast(toDisk === false ? '已保存到沙箱' : '已保存 ✓');
     } catch (e) {
