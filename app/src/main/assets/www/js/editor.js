@@ -1,13 +1,14 @@
 /* =========================================================================
- * editor.js — 编辑器（contenteditable 单层架构）
+ * editor.js — 编辑器（textarea + pre 叠层架构）
  *
- * 核心改进：弃用 textarea+pre 双层叠层，改为单一 contenteditable pre 元素
- *   → 光标与代码完美对齐（同一层）
- *   → 原生拖拽选择（水滴手柄）+ 选择高亮可见
- *   → 花括号匹配高亮在同一层生效
+ * 核心改进：弃用 contenteditable，改用 textarea（输入）+ pre（高亮）叠层
+ *   → textarea 有原生键盘支持，Android 上打字无障碍
+ *   → pre 只做语法高亮显示，pointer-events:none，不影响 textarea
+ *   → 两者排版完全一致（font/padding/line-height/white-space），光标完美对齐
+ *   → pre.innerHTML 的重渲染不会破坏 textarea 的选区/IME
  *
  * 功能：
- *   - contenteditable pre + 语法高亮（输入后重渲染，保存/恢复光标偏移）
+ *   - textarea 输入 + pre 语法高亮（输入后立即重渲染，安全）
  *   - 行号 / 同步滚动 / Tab 缩进
  *   - 文件内查找（find / findNext / findPrev）
  *   - 字体缩放（按钮 + 双指捏合 + Ctrl+/-/0）
@@ -15,12 +16,13 @@
  *   - 花括号匹配高亮
  *   - 自定义右侧拖拽滑块
  *   - 光标位置跟踪（行:列）
- *   - IME 组合输入保护（composition 期间不重渲染）
+ *   - IME 组合输入保护（composition 期间不 push undo）
+ *   - saveState / restoreState（多标签页切换）
  * ========================================================================= */
 (function (global) {
   'use strict';
 
-  var wrap, gutter, gutterInner, scrollBox, pre;
+  var wrap, gutter, gutterInner, scrollBox, textarea, pre;
   var scrollbar, scrollThumb;
   var lang = 'text';
   var currentFile = null;
@@ -51,113 +53,30 @@
   // ---- 捏合缩放 ----
   var pinchDist = 0, pinchFs = 0;
 
-  // ---- 渲染调度 ----
-  var renderPending = false;
-
-  // ======================== 选择保存/恢复 ========================
-  function saveSelection(el) {
-    var sel = window.getSelection();
-    if (!sel || !sel.rangeCount) return { start: 0, end: 0 };
-    var range = sel.getRangeAt(0);
-    var preRange = document.createRange();
-    preRange.selectNodeContents(el);
-    preRange.setEnd(range.startContainer, range.startOffset);
-    var start = preRange.toString().length;
-    preRange.setEnd(range.endContainer, range.endOffset);
-    var end = preRange.toString().length;
-    return { start: start, end: end };
-  }
-
-  function restoreSelection(el, saved) {
-    try {
-      var range = document.createRange();
-      var startNode = findNodeAndOffset(el, saved.start);
-      var endNode = findNodeAndOffset(el, saved.end);
-      if (startNode) {
-        range.setStart(startNode.node, startNode.offset);
-        if (endNode && saved.end > saved.start) {
-          range.setEnd(endNode.node, endNode.offset);
-        } else {
-          range.collapse(true);
-        }
-      } else {
-        range.selectNodeContents(el);
-        range.collapse(false);
-      }
-      var selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range);
-    } catch (e) { /* 静默失败 */ }
-  }
-
-  function findNodeAndOffset(root, offset) {
-    var charCount = 0;
-    function walk(node) {
-      if (node.nodeType === 3) {
-        var next = charCount + node.length;
-        if (offset <= next) {
-          return { node: node, offset: Math.max(0, offset - charCount) };
-        }
-        charCount = next;
-      } else if (node.nodeType === 1) {
-        // 跳过 bracket-match span 内部但仍计入字符
-        for (var i = 0; i < node.childNodes.length; i++) {
-          var result = walk(node.childNodes[i]);
-          if (result) return result;
-        }
-      }
-      return null;
-    }
-    return walk(root);
-  }
-
   // ======================== 文本 Get/Set ========================
   function getText() {
-    if (!pre) return '';
-    var text = pre.textContent || '';
-    return text.replace(/\u200b/g, ''); // 去除尾部零宽空格
+    if (!textarea) return '';
+    return textarea.value;
   }
 
   function setText(text) {
-    if (!pre) return;
+    if (!textarea) return;
+    textarea.value = text || '';
+    renderHighlight();
+    textarea.scrollTop = 0;
+    textarea.scrollLeft = 0;
+    syncScroll();
+  }
+
+  function renderHighlight() {
+    if (!pre || !textarea) return;
+    var text = textarea.value;
     var html = Highlighter.highlight(text, lang);
-    if (text.endsWith('\n')) html += '\u200b'; // 尾部空行可编辑
+    if (text.endsWith('\n')) html += '\u200b';
     pre.innerHTML = html;
     if (currentBracketMatch) highlightBracketsInDom(pre, currentBracketMatch);
     updateGutter(text);
     updateScrollbar();
-  }
-
-  // ======================== 渲染 ========================
-  function render() {
-    if (!pre) return;
-    var text = getText();
-    var html = Highlighter.highlight(text, lang);
-    if (text.endsWith('\n')) html += '\u200b';
-
-    var savedSel = saveSelection(pre);
-    pre.innerHTML = html;
-
-    if (currentBracketMatch) {
-      highlightBracketsInDom(pre, currentBracketMatch);
-    }
-
-    restoreSelection(pre, savedSel);
-    updateGutter(text);
-    updateScrollbar();
-  }
-
-  function scheduleRender() {
-    if (renderPending) return;
-    renderPending = true;
-    if (global.requestAnimationFrame) {
-      global.requestAnimationFrame(function () {
-        renderPending = false;
-        render();
-      });
-    } else {
-      setTimeout(function () { renderPending = false; render(); }, 16);
-    }
   }
 
   // ======================== 字体缩放 ========================
@@ -167,9 +86,8 @@
     wrap.style.setProperty('--fs', fontSize + 'px');
     wrap.style.setProperty('--lh', lh + 'px');
     if (onZoomCb) onZoomCb(fontSize);
-    // 字号变化后重新同步滚动条
     if (global.requestAnimationFrame) {
-      global.requestAnimationFrame(function () { updateScrollbar(); });
+      global.requestAnimationFrame(function () { syncScroll(); updateScrollbar(); });
     }
   }
   function setFontSize(px) {
@@ -206,11 +124,19 @@
 
   // ======================== 撤回 / 重做 ========================
   function snapshot() {
-    return { text: getText(), sel: saveSelection(pre) };
+    return {
+      text: textarea.value,
+      selStart: textarea.selectionStart,
+      selEnd: textarea.selectionEnd,
+      scrollTop: textarea.scrollTop
+    };
   }
   function restoreSnap(s) {
-    setText(s.text);
-    restoreSelection(pre, s.sel);
+    textarea.value = s.text;
+    textarea.setSelectionRange(s.selStart, s.selEnd);
+    textarea.scrollTop = s.scrollTop || 0;
+    renderHighlight();
+    syncScroll();
     updateCursorInfo();
   }
   function initUndo() {
@@ -223,28 +149,33 @@
     if (onUndoChangedCb) onUndoChangedCb(undoStack.length > 1, redoStack.length > 0);
   }
 
-  function pushUndo(isSimpleInsert) {
-    var cur = snapshot();
+  function pushUndo() {
+    var curText = textarea.value;
+    var curSel = { start: textarea.selectionStart, end: textarea.selectionEnd };
     var last = undoStack[undoStack.length - 1];
-    if (!last || last.text === cur.text) return;
+    if (last && last.text === curText) return;
 
     var now = Date.now();
-    var shouldGroup = isSimpleInsert &&
-                      lastInputWasSimple &&
-                      (now - lastInputTime) < 500;
+    var diff = curText.length - (last ? last.text.length : 0);
 
-    if (shouldGroup && last) {
-      // 分组：替换栈顶快照（连续字符输入合并为一个撤回步）
-      undoStack[undoStack.length - 1] = cur;
+    // 分组：单字符插入，无选区，500ms 内
+    var shouldGroup = lastInputWasSimple &&
+                      diff === 1 &&
+                      (now - lastInputTime) < 500 &&
+                      curSel.start === curSel.end;
+
+    var snap = { text: curText, sel: curSel, scrollTop: textarea.scrollTop };
+
+    if (shouldGroup) {
+      undoStack[undoStack.length - 1] = snap;
     } else {
-      // 新建撤回步
-      undoStack.push(cur);
+      undoStack.push(snap);
       if (undoStack.length > 200) undoStack.shift();
       redoStack = [];
     }
 
     lastInputTime = now;
-    lastInputWasSimple = isSimpleInsert;
+    lastInputWasSimple = (diff === 1 && curSel.start === curSel.end);
     notifyUndoChanged();
   }
 
@@ -287,9 +218,8 @@
   }
 
   function checkBracketAtCursor() {
-    var sel = saveSelection(pre);
-    var pos = sel.start;
-    var text = getText();
+    var pos = textarea.selectionStart;
+    var text = textarea.value;
     // 光标前一个字符
     if (pos > 0 && BRACKETS[text[pos - 1]]) {
       var m = findMatchingBracket(text, pos - 1);
@@ -309,7 +239,7 @@
                   !m ? true :
                   m[0] !== currentBracketMatch[0] || m[1] !== currentBracketMatch[1];
     currentBracketMatch = m;
-    if (changed) render();
+    if (changed) renderHighlight();
   }
 
   function highlightBracketsInDom(codeEl, positions) {
@@ -352,16 +282,24 @@
 
   // ======================== 光标信息 ========================
   function updateCursorInfo() {
-    if (!onCursorCb || !pre) return;
-    var sel = saveSelection(pre);
-    var pos = sel.start;
-    var text = getText();
+    if (!onCursorCb || !textarea) return;
+    var pos = textarea.selectionStart;
+    var text = textarea.value;
     var before = text.substring(0, pos);
     var line = before.split('\n').length;
     var lastNl = before.lastIndexOf('\n');
     var col = pos - (lastNl < 0 ? -1 : lastNl);
     var total = text.split('\n').length;
     onCursorCb({ line: line, col: col, totalLines: total });
+  }
+
+  // ======================== 同步滚动 ========================
+  function syncScroll() {
+    if (!pre || !textarea) return;
+    pre.scrollTop = textarea.scrollTop;
+    pre.scrollLeft = textarea.scrollLeft;
+    if (gutterInner) gutterInner.style.transform = 'translateY(' + (-textarea.scrollTop) + 'px)';
+    updateScrollbar();
   }
 
   // ======================== 自定义滚动条 ========================
@@ -380,16 +318,16 @@
       e.preventDefault();
       e.stopPropagation();
       var startY = e.clientY;
-      var startScroll = pre.scrollTop;
-      var maxScroll = pre.scrollHeight - pre.clientHeight;
+      var startScroll = textarea.scrollTop;
+      var maxScroll = textarea.scrollHeight - textarea.clientHeight;
       var thumbH = scrollThumb.offsetHeight;
-      var range = pre.clientHeight - thumbH;
+      var range = textarea.clientHeight - thumbH;
       function onMove(ev) {
         if (!dragging) return;
         ev.preventDefault();
         if (range > 0 && maxScroll > 0) {
           var dy = ev.clientY - startY;
-          pre.scrollTop = Math.max(0, Math.min(maxScroll, startScroll + (dy / range) * maxScroll));
+          textarea.scrollTop = Math.max(0, Math.min(maxScroll, startScroll + (dy / range) * maxScroll));
         }
       }
       function onUp() {
@@ -405,17 +343,17 @@
   }
 
   function updateScrollbar() {
-    if (!scrollbar || !pre) return;
-    var maxScroll = pre.scrollHeight - pre.clientHeight;
+    if (!scrollbar || !textarea) return;
+    var maxScroll = textarea.scrollHeight - textarea.clientHeight;
     if (maxScroll <= 0) {
       scrollbar.style.display = 'none';
       return;
     }
     scrollbar.style.display = '';
-    var ratio = pre.scrollTop / maxScroll;
-    var visibleRatio = pre.clientHeight / pre.scrollHeight;
-    var thumbH = Math.max(30, visibleRatio * pre.clientHeight);
-    var thumbTop = ratio * (pre.clientHeight - thumbH);
+    var ratio = textarea.scrollTop / maxScroll;
+    var visibleRatio = textarea.clientHeight / textarea.scrollHeight;
+    var thumbH = Math.max(30, visibleRatio * textarea.clientHeight);
+    var thumbTop = ratio * (textarea.clientHeight - thumbH);
     scrollThumb.style.height = thumbH + 'px';
     scrollThumb.style.top = thumbTop + 'px';
   }
@@ -435,47 +373,60 @@
     scrollBox = document.createElement('div');
     scrollBox.className = 'code-scroll';
 
-    // ★ 单层 contenteditable pre — 光标与高亮代码在同一元素
+    // ★ pre — 语法高亮层（pointer-events:none，不接收触摸）
     pre = document.createElement('pre');
-    pre.className = 'editor-pre';
-    pre.contentEditable = 'true';
-    pre.spellcheck = false;
-    pre.setAttribute('autocapitalize', 'off');
-    pre.setAttribute('autocorrect', 'off');
-    pre.setAttribute('autocomplete', 'off');
+    pre.className = 'highlight-pre';
+    pre.setAttribute('aria-hidden', 'true');
+
+    // ★ textarea — 输入层（透明文字，白色光标，原生键盘支持）
+    textarea = document.createElement('textarea');
+    textarea.className = 'editor-ta';
+    textarea.spellcheck = false;
+    textarea.setAttribute('autocapitalize', 'off');
+    textarea.setAttribute('autocorrect', 'off');
+    textarea.setAttribute('autocomplete', 'off');
+    textarea.setAttribute('wrap', 'off');
+    textarea.setAttribute('inputmode', 'text');
+    textarea.setAttribute('enterkeyhint', 'enter');
 
     scrollBox.appendChild(pre);
+    scrollBox.appendChild(textarea);
     container.appendChild(gutter);
     container.appendChild(scrollBox);
 
     buildScrollbar();
 
     // ---- 事件 ----
-    pre.addEventListener('input', onInput);
-    pre.addEventListener('scroll', onScroll);
-    pre.addEventListener('keydown', onKeydown);
-    pre.addEventListener('keyup', onKeyup);
-    pre.addEventListener('click', function () {
+    textarea.addEventListener('input', onInput);
+    textarea.addEventListener('scroll', function () { syncScroll(); });
+    textarea.addEventListener('keydown', onKeydown);
+    textarea.addEventListener('keyup', onKeyup);
+    textarea.addEventListener('click', function () {
+      setTimeout(function () { updateBracketMatch(); updateCursorInfo(); }, 0);
+    });
+    textarea.addEventListener('select', function () {
       setTimeout(function () { updateBracketMatch(); updateCursorInfo(); }, 0);
     });
 
     // IME 组合输入保护
-    pre.addEventListener('compositionstart', function () { composing = true; });
-    pre.addEventListener('compositionend', function () {
+    textarea.addEventListener('compositionstart', function () { composing = true; });
+    textarea.addEventListener('compositionend', function () {
       composing = false;
-      render();
+      renderHighlight();
+      syncScroll();
       updateBracketMatch();
       updateCursorInfo();
       if (onChangeCb) onChangeCb(currentFile, getText());
-      pushUndo(false);
+      pushUndo();
     });
 
-    // 粘贴 → 纯文本
-    pre.addEventListener('paste', onPaste);
-
-    // 拖拽 → 阻止（防止 DOM 混乱）
-    pre.addEventListener('dragstart', function (e) { e.preventDefault(); });
-    pre.addEventListener('drop', function (e) { e.preventDefault(); });
+    // selectionchange — 光标移动时更新括号匹配
+    document.addEventListener('selectionchange', function () {
+      if (document.activeElement === textarea) {
+        updateBracketMatch();
+        updateCursorInfo();
+      }
+    });
 
     // 捏合缩放
     container.addEventListener('touchstart', onPinchStart, { passive: false });
@@ -493,47 +444,29 @@
 
   // ======================== 事件处理 ========================
   function onInput(e) {
-    if (composing) {
-      // 组合输入期间：仅更新光标，不重渲染
-      updateCursorInfo();
-      if (onChangeCb) onChangeCb(currentFile, getText());
-      return;
-    }
-
-    scheduleRender();
-    updateBracketMatch();
+    // 立即重渲染高亮（安全：pre 是独立元素，不影响 textarea）
+    renderHighlight();
+    syncScroll();
     updateCursorInfo();
     if (onChangeCb) onChangeCb(currentFile, getText());
 
-    // 判断是否为简单单字符插入（用于撤回分组）
-    var inputType = (e && e.inputType) || '';
-    var data = (e && e.data) || '';
-    var isSimpleInsert = inputType === 'insertText' && data.length === 1 && data !== '\n';
+    if (composing) return; // IME 组合期间不 push undo
 
-    // inputType 不可用时的 fallback
-    if (!inputType) {
-      var last = undoStack[undoStack.length - 1];
-      if (last) {
-        var diff = getText().length - last.text.length;
-        if (diff === 1) {
-          // 可能是单字符插入，检查是否为换行
-          var inserted = getText().charAt(last.sel ? last.sel.start : 0);
-          isSimpleInsert = inserted !== '\n';
-        }
-      }
-    }
-
-    pushUndo(isSimpleInsert);
+    pushUndo();
   }
 
   function onKeydown(e) {
     if (e.key === 'Tab') {
       e.preventDefault();
-      document.execCommand('insertText', false, '  ');
-    } else if (e.key === 'Enter') {
-      // 拦截 → 插入 \n 而非 <div>/<br>
-      e.preventDefault();
-      document.execCommand('insertText', false, '\n');
+      var start = textarea.selectionStart;
+      var end = textarea.selectionEnd;
+      var val = textarea.value;
+      textarea.value = val.substring(0, start) + '  ' + val.substring(end);
+      textarea.selectionStart = textarea.selectionEnd = start + 2;
+      renderHighlight();
+      syncScroll();
+      if (onChangeCb) onChangeCb(currentFile, getText());
+      pushUndo();
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault();
       global.App && global.App.openSearch();
@@ -553,6 +486,7 @@
     } else if ((e.ctrlKey || e.metaKey) && e.key === '0') {
       e.preventDefault(); zoomReset();
     }
+    // Enter 键不拦截 — textarea 原生处理换行
   }
 
   function onKeyup(e) {
@@ -563,18 +497,6 @@
     }
   }
 
-  function onPaste(e) {
-    e.preventDefault();
-    var cd = e.clipboardData || global.clipboardData;
-    var text = cd ? cd.getData('text/plain') : '';
-    if (text) document.execCommand('insertText', false, text);
-  }
-
-  function onScroll() {
-    if (gutterInner) gutterInner.style.transform = 'translateY(' + (-pre.scrollTop) + 'px)';
-    updateScrollbar();
-  }
-
   // ======================== 行号 ========================
   function updateGutter(text) {
     if (!gutterInner) return;
@@ -582,11 +504,6 @@
     var s = '';
     for (var i = 1; i <= lines; i++) s += i + '\n';
     gutterInner.textContent = s;
-  }
-
-  function syncGutter() {
-    if (gutterInner) gutterInner.style.transform = 'translateY(' + (-pre.scrollTop) + 'px)';
-    updateScrollbar();
   }
 
   // ======================== 复制 ========================
@@ -621,10 +538,8 @@
       currentFile = file;
       lang = language || 'text';
       currentBracketMatch = null;
-      pre.blur(); // 先失焦避免键盘弹出
+      textarea.blur();
       setText(content || '');
-      pre.scrollTop = 0;
-      syncGutter();
       initUndo();
       updateCursorInfo();
     },
@@ -632,8 +547,39 @@
     getValue: function () { return getText(); },
     setOnChange: function (cb) { onChangeCb = cb; },
     getFile: function () { return currentFile; },
-    focus: function () { if (pre) pre.focus(); },
+    focus: function () { if (textarea) textarea.focus(); },
+    blur: function () { if (textarea) textarea.blur(); },
     getPre: function () { return pre; },
+    getTextarea: function () { return textarea; },
+
+    // ---- 多标签页：保存/恢复状态 ----
+    saveState: function () {
+      return {
+        text: textarea.value,
+        lang: lang,
+        scrollTop: textarea.scrollTop,
+        scrollLeft: textarea.scrollLeft,
+        selStart: textarea.selectionStart,
+        selEnd: textarea.selectionEnd,
+        undoStack: undoStack.map(function (s) { return JSON.parse(JSON.stringify(s)); }),
+        redoStack: redoStack.map(function (s) { return JSON.parse(JSON.stringify(s)); }),
+        bracketMatch: currentBracketMatch
+      };
+    },
+    restoreState: function (state) {
+      lang = state.lang || 'text';
+      currentBracketMatch = state.bracketMatch || null;
+      textarea.value = state.text || '';
+      renderHighlight();
+      textarea.scrollTop = state.scrollTop || 0;
+      textarea.scrollLeft = state.scrollLeft || 0;
+      textarea.setSelectionRange(state.selStart || 0, state.selEnd || 0);
+      undoStack = state.undoStack || [snapshot()];
+      redoStack = state.redoStack || [];
+      syncScroll();
+      updateCursorInfo();
+      notifyUndoChanged();
+    },
 
     // 字体缩放
     zoomIn: zoomIn,
@@ -651,10 +597,9 @@
     // 光标
     setOnCursor: function (cb) { onCursorCb = cb; },
     getCursorInfo: function () {
-      if (!pre) return null;
-      var sel = saveSelection(pre);
-      var pos = sel.start;
-      var text = getText();
+      if (!textarea) return null;
+      var pos = textarea.selectionStart;
+      var text = textarea.value;
       var before = text.substring(0, pos);
       return {
         line: before.split('\n').length,
@@ -666,8 +611,7 @@
     // 复制
     copyAll: function () { return copyToClipboard(getText()); },
     copySelection: function () {
-      var sel = window.getSelection();
-      var text = sel ? sel.toString() : '';
+      var text = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd);
       if (!text) return false;
       return copyToClipboard(text);
     },
@@ -685,14 +629,10 @@
     },
     getTotalLines: function () { return getText().split('\n').length; },
     hasSelection: function () {
-      var sel = window.getSelection();
-      return sel && sel.rangeCount > 0 && !sel.isCollapsed;
+      return textarea && textarea.selectionStart !== textarea.selectionEnd;
     },
     isSelectionInEditor: function () {
-      var sel = window.getSelection();
-      if (!sel || !sel.rangeCount) return false;
-      var node = sel.getRangeAt(0).commonAncestorContainer;
-      return pre && pre.contains(node);
+      return document.activeElement === textarea && textarea.selectionStart !== textarea.selectionEnd;
     },
 
     // 查找
@@ -728,30 +668,21 @@
 
     gotoLine: function (lineNo) {
       var text = getText();
-      var lines = text.split('\n');
       var pos = 0;
-      for (var i = 0; i < lineNo - 1 && i < lines.length; i++) pos += lines[i].length + 1;
-      var lineLen = (lines[Math.min(lineNo - 1, lines.length - 1)] || '').length;
-
-      // 不 focus → 不弹键盘 → 不卡顿
-      var startNode = findNodeAndOffset(pre, pos);
-      var endNode = findNodeAndOffset(pre, pos + lineLen);
-      if (startNode) {
-        var range = document.createRange();
-        range.setStart(startNode.node, startNode.offset);
-        if (endNode && lineLen > 0) {
-          range.setEnd(endNode.node, endNode.offset);
-        } else {
-          range.collapse(true);
-        }
-        var sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
+      var lineCount = 1;
+      for (var i = 0; i < text.length && lineCount < lineNo; i++) {
+        if (text[i] === '\n') lineCount++;
+        pos++;
       }
+      var lineLen = 0;
+      for (var i = pos; i < text.length && text[i] !== '\n'; i++) lineLen++;
 
-      var lh = parseFloat(getComputedStyle(pre).lineHeight) || 20;
-      pre.scrollTop = Math.max(0, (lineNo - 1) * lh - pre.clientHeight / 2);
-      syncGutter();
+      // 不 focus → 不弹键盘
+      textarea.setSelectionRange(pos, pos + lineLen);
+
+      var lh = parseFloat(getComputedStyle(textarea).lineHeight) || 20;
+      textarea.scrollTop = Math.max(0, (lineNo - 1) * lh - textarea.clientHeight / 2);
+      syncScroll();
       updateBracketMatch();
       updateCursorInfo();
     },
@@ -759,31 +690,18 @@
 
   // ======================== 内部：搜索匹配选择 ========================
   function selectMatch() {
-    if (matchIdx < 0 || !matches[matchIdx]) return;
+    if (matchIdx < 0 || !matches[matchIdx] || !textarea) return;
     var start = matches[matchIdx];
     var end = start + (currentQueryLen || 1);
 
-    var startNode = findNodeAndOffset(pre, start);
-    var endNode = findNodeAndOffset(pre, end);
-    if (startNode) {
-      var range = document.createRange();
-      range.setStart(startNode.node, startNode.offset);
-      if (endNode) {
-        range.setEnd(endNode.node, endNode.offset);
-      } else {
-        range.collapse(true);
-      }
-      var sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
+    textarea.setSelectionRange(start, end);
 
     var text = getText();
     var before = text.slice(0, start);
     var line = before.split('\n').length - 1;
-    var lh = parseFloat(getComputedStyle(pre).lineHeight) || 20;
-    pre.scrollTop = Math.max(0, line * lh - pre.clientHeight / 2);
-    syncGutter();
+    var lh = parseFloat(getComputedStyle(textarea).lineHeight) || 20;
+    textarea.scrollTop = Math.max(0, line * lh - textarea.clientHeight / 2);
+    syncScroll();
   }
 
   function escapeReg(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
