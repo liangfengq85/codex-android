@@ -6,6 +6,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.util.Log
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.result.ActivityResultLauncher
@@ -128,7 +130,15 @@ class MainActivity : AppCompatActivity() {
             builtInZoomControls = true
             displayZoomControls = false
             setSupportZoom(true)
+            mediaPlaybackRequiresUserGesture = false
+            loadWithOverviewMode = true
+            useWideViewPort = true
         }
+        // ★ 焦点设置 — 确保 textarea 点击时键盘弹出
+        webView.isFocusable = true
+        webView.isFocusableInTouchMode = true
+        webView.requestFocus()
+
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
@@ -146,6 +156,20 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+
+        // ★ WebChromeClient — 支持 console.log / 输入法交互
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(message: String?, lineNumber: Int, sourceID: String?) {
+                Log.d(TAG, "JS Console: $message ($sourceID:$lineNumber)")
+            }
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                if (consoleMessage != null) {
+                    Log.d(TAG, "JS: ${consoleMessage.message()} (${consoleMessage.sourceId()}:${consoleMessage.lineNumber()})")
+                }
+                return true
+            }
+        }
+
         webView.addJavascriptInterface(FileBridge(this), "AndroidBridge")
     }
 
