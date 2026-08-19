@@ -259,6 +259,16 @@ textarea.editor-ta { scrollbar-width: none; }
   border-radius: 2px;
   font-weight: bold;
 }
+.search-hit {
+  background: rgba(255, 165, 0, 0.45);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(255, 165, 0, 0.6);
+  animation: search-flash 0.4s ease;
+}
+@keyframes search-flash {
+  0% { background: rgba(255, 215, 0, 0.8); }
+  100% { background: rgba(255, 165, 0, 0.45); }
+}
 
 /* 自定义滚动条 */
 .custom-scrollbar {
