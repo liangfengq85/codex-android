@@ -1,9 +1,11 @@
 /* ============================ CodeX 主题（VS Code 暗色） ============================ */
 :root {
   --bg: #1e1e1e;
-  --bg-bar: #333333;
+  --bg-bar: #2d2d30;
   --bg-side: #252526;
   --bg-elev: #2d2d30;
+  --bg-tab: #2d2d30;
+  --bg-tab-active: #1e1e1e;
   --fg: #d4d4d4;
   --fg-dim: #858585;
   --accent: #0e639c;
@@ -123,6 +125,49 @@ body {
 }
 .big-btn:active { background: var(--accent-hi); }
 
+/* ---------------- 标签页栏 ---------------- */
+.tab-bar {
+  flex: 0 0 32px; display: flex; overflow-x: auto; overflow-y: hidden;
+  background: var(--bg-tab); border-bottom: 1px solid var(--border);
+  height: 32px; scrollbar-width: none; -ms-overflow-style: none;
+  flex-shrink: 0;
+}
+.tab-bar::-webkit-scrollbar { display: none; height: 0; }
+.tab {
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 6px 0 10px; height: 32px;
+  background: var(--bg-tab); border-right: 1px solid var(--border);
+  cursor: pointer; white-space: nowrap; flex: 0 0 auto;
+  max-width: 200px; min-width: 70px; position: relative;
+  -webkit-tap-highlight-color: transparent;
+}
+.tab:active { background: var(--active); }
+.tab.active {
+  background: var(--bg-tab-active);
+}
+.tab.active::after {
+  content: ''; position: absolute; top: 0; left: 0; right: 0;
+  height: 2px; background: var(--accent);
+}
+.tab-icon { font-size: 11px; flex: 0 0 auto; }
+.tab-name {
+  font-size: 12px; color: var(--fg-dim); overflow: hidden;
+  text-overflow: ellipsis; max-width: 120px;
+}
+.tab.active .tab-name { color: var(--fg); }
+.tab-dirty {
+  color: #e2c08d; font-size: 14px; flex: 0 0 auto; line-height: 1;
+  margin-left: -2px;
+}
+.tab-close {
+  background: none; border: none; color: var(--fg-dim);
+  font-size: 12px; padding: 2px 4px; cursor: pointer;
+  border-radius: 3px; line-height: 1; flex: 0 0 auto;
+  -webkit-tap-highlight-color: transparent;
+}
+.tab-close:active { background: var(--active); color: #fff; }
+.tab-spacer { flex: 1 1 auto; }
+
 /* ---------------- 编辑器工具条 ---------------- */
 .editor-wrap {
   flex: 1; display: flex; flex-direction: column; min-width: 0;
@@ -144,7 +189,7 @@ body {
 .etool-spacer { flex: 1 1 auto; }
 .etool-info { font-size: 11px; color: var(--fg-dim); white-space: nowrap; }
 
-/* ---------------- 编辑器（contenteditable 单层） ---------------- */
+/* ---------------- 编辑器（textarea + pre 叠层） ---------------- */
 .editor-host { flex: 1; display: flex; min-width: 0; background: var(--bg); overflow: hidden; position: relative; }
 .gutter {
   flex: 0 0 52px; width: 52px; overflow: hidden; background: var(--bg);
@@ -157,8 +202,8 @@ body {
 }
 .code-scroll { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; }
 
-/* ★ contenteditable pre — 单层编辑器，光标与高亮在同一元素 */
-pre.editor-pre {
+/* ★ pre — 语法高亮层（在下层，pointer-events:none） */
+pre.highlight-pre {
   margin: 0; border: 0;
   position: absolute; top: 0; left: 0;
   width: 100%; height: 100%;
@@ -166,22 +211,38 @@ pre.editor-pre {
   font-family: var(--mono); font-size: var(--fs); line-height: var(--lh);
   tab-size: 2; -moz-tab-size: 2;
   white-space: pre; word-wrap: normal; overflow-wrap: normal;
-  overflow: auto; outline: none;
+  overflow: auto;
+  pointer-events: none;
   color: var(--fg); background: transparent;
-  caret-color: #fff;
+  z-index: 1;
+  letter-spacing: 0; word-spacing: 0;
   -webkit-text-size-adjust: 100%;
+}
+pre.highlight-pre::-webkit-scrollbar { width: 0; height: 0; display: none; }
+pre.highlight-pre { scrollbar-width: none; }
+
+/* ★ textarea — 输入层（在上层，透明文字，白色光标） */
+textarea.editor-ta {
+  margin: 0; border: 0;
+  position: absolute; top: 0; left: 0;
+  width: 100%; height: 100%;
+  padding: var(--pad-y) var(--pad-x);
+  font-family: var(--mono); font-size: var(--fs); line-height: var(--lh);
+  tab-size: 2; -moz-tab-size: 2;
+  white-space: pre; word-wrap: normal; overflow-wrap: normal;
+  overflow: auto;
+  color: transparent;
+  caret-color: #fff;
+  background: transparent;
+  -webkit-text-fill-color: transparent;
+  resize: none; outline: none;
+  z-index: 2;
   letter-spacing: 0; word-spacing: 0;
   -webkit-appearance: none; appearance: none;
+  -webkit-text-size-adjust: 100%;
 }
-
-/* 隐藏 contenteditable 原生滚动条 */
-pre.editor-pre::-webkit-scrollbar { width: 0; height: 0; display: none; }
-pre.editor-pre { scrollbar-width: none; }
-
-/* 原生选择高亮（水滴手柄拖选区域） */
-pre.editor-pre::selection { background: #264f78; color: #fff; }
-pre.editor-pre *::selection { background: #264f78; color: #fff; }
-pre.editor-pre::-moz-selection { background: #264f78; color: #fff; }
+textarea.editor-ta::-webkit-scrollbar { width: 0; height: 0; display: none; }
+textarea.editor-ta { scrollbar-width: none; }
 
 /* 语法配色 */
 .tok-keyword  { color: #569cd6; }
@@ -352,9 +413,13 @@ pre.editor-pre::-moz-selection { background: #264f78; color: #fff; }
   .etool-btn { padding: 5px 6px; font-size: 12px; }
   .etool-info { display: none; }
   .zoom-bar { right: 40px; bottom: 6px; }
+  .tab { max-width: 140px; min-width: 60px; padding: 0 4px 0 8px; }
+  .tab-name { max-width: 80px; }
 }
 @media (max-width: 380px) {
   :root { --sidebar-w: 120px; }
   .btn { padding: 6px 6px; }
   .sp-mode-btn { font-size: 10px; padding: 5px 4px; }
+  .tab { max-width: 110px; min-width: 50px; }
+  .tab-name { max-width: 60px; }
 }
