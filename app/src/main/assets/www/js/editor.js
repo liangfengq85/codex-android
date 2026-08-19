@@ -47,6 +47,10 @@
   // ---- 花括号匹配 ----
   var currentBracketMatch = null;
 
+  // ---- 搜索跳转高亮 ----
+  var searchHitRange = null;   // [startPos, endPos]
+  var searchHitTimer = null;
+
   // ---- 光标跟踪 ----
   var onCursorCb = null;
 
@@ -75,6 +79,7 @@
     if (text.endsWith('\n')) html += '\u200b';
     pre.innerHTML = html;
     if (currentBracketMatch) highlightBracketsInDom(pre, currentBracketMatch);
+    if (searchHitRange) highlightRangeInDom(pre, searchHitRange, 'search-hit');
     updateGutter(text);
     updateScrollbar();
   }
@@ -272,6 +277,48 @@
         rawPos += text.length;
       } else if (node.nodeType === 1) {
         if (node.classList && node.classList.contains('bracket-match')) return;
+        var child = node.firstChild;
+        while (child) { walk(child); child = child.nextSibling; }
+      }
+    }
+    walk(codeEl);
+    toReplace.forEach(function (r) { r.old.parentNode.replaceChild(r.frag, r.old); });
+  }
+
+  // ======================== 搜索高亮（单范围） ========================
+  function highlightRangeInDom(codeEl, range, className) {
+    if (!range || range.length < 2) return;
+    var start = range[0], end = range[1];
+    var rawPos = 0;
+    var toReplace = [];
+    function walk(node) {
+      if (node.nodeType === 3) {
+        var text = node.nodeValue;
+        var nodeEnd = rawPos + text.length;
+        if (nodeEnd > start && rawPos < end) {
+          // 有交集
+          var frag = document.createDocumentFragment();
+          var i = 0;
+          // 前面不受影响的部分
+          if (rawPos < start) {
+            var cut = start - rawPos;
+            frag.appendChild(document.createTextNode(text.slice(0, cut)));
+            i = cut;
+          }
+          // 高亮部分
+          var hlEnd = Math.min(end, nodeEnd) - rawPos;
+          var sp = document.createElement('span');
+          sp.className = className;
+          sp.textContent = text.slice(i, hlEnd);
+          frag.appendChild(sp);
+          i = hlEnd;
+          // 后面不受影响的部分
+          if (i < text.length) frag.appendChild(document.createTextNode(text.slice(i)));
+          toReplace.push({ old: node, frag: frag });
+        }
+        rawPos += text.length;
+      } else if (node.nodeType === 1) {
+        if (node.classList && node.classList.contains(className)) return;
         var child = node.firstChild;
         while (child) { walk(child); child = child.nextSibling; }
       }
@@ -666,7 +713,8 @@
     findPrev: function (q, opts) { return this.find(q, Object.assign({ dir: 'prev' }, opts)); },
     matchInfo: function () { return { idx: matchIdx, total: matches.length }; },
 
-    gotoLine: function (lineNo) {
+    gotoLine: function (lineNo, opts) {
+      opts = opts || {};
       var text = getText();
       var pos = 0;
       var lineCount = 1;
@@ -685,6 +733,25 @@
       syncScroll();
       updateBracketMatch();
       updateCursorInfo();
+
+      // ★ 搜索词高亮
+      if (opts.highlight) {
+        var lineText = text.substr(pos, lineLen);
+        var caseSensitive = opts.caseSensitive || false;
+        var flags = caseSensitive ? '' : 'i';
+        var termRe = new RegExp(escapeReg(opts.highlight), flags);
+        var m = termRe.exec(lineText);
+        if (m) {
+          searchHitRange = [pos + m.index, pos + m.index + m[0].length];
+          renderHighlight();
+          // 3 秒后自动清除高亮
+          if (searchHitTimer) clearTimeout(searchHitTimer);
+          searchHitTimer = setTimeout(function () {
+            searchHitRange = null;
+            renderHighlight();
+          }, 3000);
+        }
+      }
     },
   };
 
