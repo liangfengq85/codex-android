@@ -31,7 +31,7 @@ jobs:
             sudo mv "$SDK_ROOT/cmdline-tools/cmdline-tools" "$SDK_ROOT/cmdline-tools/latest"
           fi
           echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          sdkmanager --version
+          # 注意：GITHUB_PATH 的写入只对后续 step 生效，本 step 内不能直接调 sdkmanager
 
       - name: Accept Android licenses
         run: yes | sdkmanager --licenses || true
