@@ -18,20 +18,32 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # 新版 ubuntu runner 不再预装 sdkmanager，android-actions/setup-android@v3 会崩，
+      # 改为手动安装 Google 官方 cmdline-tools 并加入 PATH（life-restart-app 同款已验证配方）
+      - name: Setup Android cmdline-tools
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          if [ ! -f "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            sudo mkdir -p "$SDK_ROOT/cmdline-tools"
+            wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/clt.zip
+            sudo unzip -q /tmp/clt.zip -d "$SDK_ROOT/cmdline-tools"
+            sudo mv "$SDK_ROOT/cmdline-tools/cmdline-tools" "$SDK_ROOT/cmdline-tools/latest"
+          fi
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          sdkmanager --version
 
       - name: Accept Android licenses
         run: yes | sdkmanager --licenses || true
+
+      - name: Install SDK packages (platform 34 + build-tools)
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
       - name: Install Gradle 8.2
         run: |
           curl -fsSL -o gradle.zip https://services.gradle.org/distributions/gradle-8.2-bin.zip
           unzip -q gradle.zip
           echo "$PWD/gradle-8.2/bin" >> "$GITHUB_PATH"
-
-      - name: Install build-tools (用于对齐与签名)
-        run: sdkmanager "build-tools;34.0.0"
 
       - name: Build release APK
         run: gradle :app:assembleRelease --no-daemon
